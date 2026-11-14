@@ -6,4 +6,11 @@ authors:
 targets:
   grml.agent:
     main: src/bin/grml.agent.cr
-crystal: ">= 1.20.3"
+crystal: ">= 1.22.0"
+dependencies:
+  qemu:
+    github: ch1c0t/crystal.qemu
+    branch: main
+  tmux_repl:
+    github: ch1c0t/tmux-repl
+    branch: main
