@@ -1,0 +1,1 @@
+puts "grml.agent is made with Crystal."

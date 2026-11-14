@@ -1,0 +1,9 @@
+---
+name: grml.agent
+version: 0.0.0
+authors:
+- Anatoly Chernov <chertoly@gmail.com>
+targets:
+  grml.agent:
+    main: src/bin/grml.agent.cr
+crystal: ">= 1.20.3"
