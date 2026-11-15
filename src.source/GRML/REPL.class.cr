@@ -66,7 +66,7 @@ def self.build_definition(agent : T) : TmuxREPL::Definition forall T
       mountpoint = nil
       format = "qcow2"
       if optional = arguments[2]?
-        if DISK_FORMATS.includes?(optional)
+        if optional == "qcow2" || optional == "raw"
           format = optional
         else
           mountpoint = optional
