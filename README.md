@@ -43,6 +43,12 @@ Example host REPL commands:
     guest_exec 'lsblk -f; blkid -p /dev/vda1; file -s /dev/vda1'
     ocr
 
+Each REPL command is implemented in its own module under
+src.source/GRML/REPL/Commands/. GRML::REPL::Definition assembles those
+modules into the Tmux REPL definition. The registered command names are also
+the source of truth for input autocomplete; custom REPL sessions suggest
+registered application commands instead of executables from the host PATH.
+
 The create_ext4_disk command runs host-side image creation and QMP
 hot-plugging, followed by guest-side GPT partitioning, ext4 formatting, and
 mounting through QEMU Guest Agent. It identifies the added virtio device by
