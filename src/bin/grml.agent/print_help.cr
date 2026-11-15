@@ -1,5 +1,45 @@
 HELP_MESSAGE = <<-S
-grml.agent is a CLI made with Crystal.
+grml.agent boots GRML and provides an interactive host-side Tmux REPL.
+
+Usage:
+  grml.agent boot [--iso PATH]
+  grml.agent tmux [--iso PATH]
+  grml.agent prepare_alpine_bundle [alpine_branch]
+  grml.agent --help
+  grml.agent --version
+
+The tmux command starts tmux inside the GRML guest and a separate host-side
+Tmux REPL connected to the same running VM. The host REPL supports:
+
+  ocr
+    Recognize text in the latest captured guest display frame.
+  guest_exec <shell command>
+    Execute a shell command inside the GRML guest through QEMU Guest Agent.
+    Output and exit status are returned to the host REPL. Commands run as root.
+  create_disk <name> <size> [qcow2|raw]
+    Create a disk image under ./disks/ and hot-attach it to the running VM.
+    Example: create_disk data 20G
+  attach_disk <path> [qcow2|raw]
+    Hot-attach an existing disk image to the running VM.
+  create_ext4_disk <name> <size> [mountpoint] [qcow2|raw]
+    Create and hot-attach a disk image, create a GPT partition, format it
+    as ext4, and mount it inside the GRML guest. The default mount point is
+    /mnt/<name>. Example: create_ext4_disk data 20G /mnt/data
+  prepare_alpine_bundle [alpine_branch]
+    Prepare and verify an offline Alpine APK repository bundle.
+
+Disk hot-plugging creates a virtio-blk device through QEMU's QMP interface.
+The guest-side setup is executed through QEMU Guest Agent. The new disk is
+identified by its virtio serial, partitioned with sfdisk, formatted with
+mkfs.ext4, and mounted at the requested guest path.
+
+The boot and tmux commands discover a GRML ISO in ./cdrom/ (or QEMU_ISO_DIR)
+unless --iso is supplied. The tmux command keeps the VM and host REPL alive
+until the REPL is stopped or Ctrl-C is pressed.
+
+Logging:
+  GRML_AGENT_REPL_FOCUS=true|false (default: true)
+  XEPHYR_LOG_LEVEL=INFO|DEBUG|TRACE (default: INFO)
 S
 
 def print_help

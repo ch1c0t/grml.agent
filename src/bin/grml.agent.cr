@@ -14,4 +14,7 @@ when 1
   end
 end
 
-puts "grml.agent is made with Crystal."
+require "../logger"
+require "../grml"
+
+GRML::CLI.run
