@@ -309,7 +309,10 @@ module GRML
           )
       
           unless result.success?
-            raise "Guest provisioning command exited with status #{result.exit_code}: #{result.stderr.strip}"
+            details = [result.stdout.strip, result.stderr.strip].reject { |part| part.empty? }.join("\n")
+            message = "Guest provisioning command exited with status #{result.exit_code}"
+            message += ":\n#{details}" unless details.empty?
+            raise message
           end
         rescue ex
           raise "Disk image #{path} remains attached as #{attached[:device_id]}, but guest partitioning, ext4 formatting, or mounting failed: #{ex.message}"
@@ -447,7 +450,7 @@ module GRML
       
           mkfs.ext4 -F "$partition"
           mkdir -p "$mountpoint"
-          mount "$partition" "$mountpoint"
+          mount -t ext4 "$partition" "$mountpoint"
           findmnt -rn -t ext4 --target "$mountpoint" >/dev/null
           printf 'Mounted %s on %s as ext4\\n' "$partition" "$mountpoint"
         SCRIPT
