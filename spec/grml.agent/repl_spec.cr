@@ -118,7 +118,7 @@ describe GRML::REPL do
     end
   end
 
-  it "registers the host commands" do
+  it "registers the commands contributed by each command module" do
     definition = GRML::REPL.build_definition(FakeGRMLAgent.new)
     definition.command_names.should eq([
       "attach_disk",

@@ -42,7 +42,7 @@ shards:
 
   tmux_repl:
     git: https://github.com/ch1c0t/tmux-repl.git
-    version: 0.1.0+git.commit.8a321fa4049f989c44b2f1cea6720415b7c4909c
+    version: 0.1.0+git.commit.77da7a5a45147caa8d37892409b49d2715b65089
 
   xephyr_context:
     git: https://github.com/ch1c0t/xephyr.context.git
