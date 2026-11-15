@@ -104,11 +104,11 @@ describe GRML::REPL do
   it "registers the host commands" do
     definition = GRML::REPL.build_definition(FakeGRMLAgent.new)
     definition.command_names.should eq([
+      "attach_disk",
+      "create_disk",
+      "create_ext4_disk",
       "ocr",
       "prepare_alpine_bundle",
-      "create_disk",
-      "attach_disk",
-      "create_ext4_disk",
     ])
   end
 
