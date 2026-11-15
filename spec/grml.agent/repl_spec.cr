@@ -11,15 +11,35 @@ struct FakeGRMLOCRResult
   end
 end
 
+struct FakeGRMLCommandResult
+  getter exit_code : Int32
+  getter stdout : String
+  getter stderr : String
+
+  def initialize(@exit_code : Int32 = 0, @stdout : String = "", @stderr : String = "")
+  end
+
+  def success? : Bool
+    @exit_code == 0
+  end
+end
+
 class FakeGRMLInteraction
   def latest_ocr : FakeGRMLOCRResult
     FakeGRMLOCRResult.new
+  end
+
+  def execute(command : String, timeout : Time::Span = 30.seconds) : FakeGRMLCommandResult
+    FakeGRMLCommandResult.new(0, "guest output\n")
   end
 end
 
 class FakeGRMLAgent
   getter interaction : FakeGRMLInteraction
   getter prepared_branches = [] of String
+  getter created_disks = [] of Tuple(String, String, String)
+  getter attached_disks = [] of Tuple(String, String)
+  getter ext4_disks = [] of Tuple(String, String, String?, String)
 
   def initialize
     @interaction = FakeGRMLInteraction.new
@@ -31,6 +51,21 @@ class FakeGRMLAgent
   ) : Nil
     @prepared_branches << branch
     progress.try &.call("fake preparation progress")
+  end
+
+  def create_disk(name : String, size : String, format : String = "qcow2") : String
+    @created_disks << {name, size, format}
+    "./disks/#{name}.#{format}"
+  end
+
+  def attach_disk(path : String, format : String = "qcow2") : String
+    @attached_disks << {path, format}
+    "fake-device"
+  end
+
+  def create_ext4_disk(name : String, size : String, mountpoint : String? = nil, format : String = "qcow2") : String
+    @ext4_disks << {name, size, mountpoint, format}
+    "./disks/#{name}.#{format} (ext4 mounted)"
   end
 end
 
@@ -83,9 +118,16 @@ describe GRML::REPL do
     end
   end
 
-  it "registers both custom commands" do
+  it "registers the host commands" do
     definition = GRML::REPL.build_definition(FakeGRMLAgent.new)
-    definition.command_names.should eq(["ocr", "prepare_alpine_bundle"])
+    definition.command_names.should eq([
+      "attach_disk",
+      "create_disk",
+      "create_ext4_disk",
+      "guest_exec",
+      "ocr",
+      "prepare_alpine_bundle",
+    ])
   end
 
   it "defaults bundle preparation to latest-stable" do

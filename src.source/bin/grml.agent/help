@@ -1,4 +1,4 @@
-grml.agent boots GRML and provides an interactive command line.
+grml.agent boots GRML and provides an interactive host-side Tmux REPL.
 
 Usage:
   grml.agent boot [--iso PATH]
@@ -7,51 +7,35 @@ Usage:
   grml.agent --help
   grml.agent --version
 
-The boot and tmux commands discover a GRML ISO in ./cdrom/ (or
-QEMU_ISO_DIR) unless --iso is supplied. The boot command advances through
-GRML boot prompts, verifies the QEMU Guest Agent and shared directory, then
-starts a custom Tmux REPL in the same booted guest.
+The tmux command starts tmux inside the GRML guest and a separate host-side
+Tmux REPL connected to the same running VM. The host REPL supports:
 
-REPL commands:
   ocr
-    Recognize text in the latest captured GRML display frame.
+    Recognize text in the latest captured guest display frame.
+  guest_exec <shell command>
+    Execute a shell command inside the GRML guest through QEMU Guest Agent.
+    Output and exit status are returned to the host REPL. Commands run as root.
+  create_disk <name> <size> [qcow2|raw]
+    Create a disk image under ./disks/ and hot-attach it to the running VM.
+    Example: create_disk data 20G
+  attach_disk <path> [qcow2|raw]
+    Hot-attach an existing disk image to the running VM.
+  create_ext4_disk <name> <size> [mountpoint] [qcow2|raw]
+    Create and hot-attach a disk image, create a GPT partition, format it
+    as ext4, and mount it inside the GRML guest. The default mount point is
+    /mnt/<name>. Example: create_ext4_disk data 20G /mnt/data
   prepare_alpine_bundle [alpine_branch]
-    Fetch the recursive dependency closure of alpine-base and alpine-keys
-    from Alpine main and community, then store it under
-    /mnt/shared/alpine-bundles/runs/<run_id>. The default branch is
-    latest-stable. Each invocation creates a unique UTC timestamped run.
-    Downloaded APK signatures are checked with the embedded Alpine public
-    keys. A local x86_64 APK index is generated and an isolated installation
-    is tested with networking disabled. The operation writes MANIFEST and
-    SHA256SUMS, verifies every listed checksum, marks the run COMPLETE, and
-    atomically updates LATEST only after verification succeeds.
-    See docs/alpine-offline-bundle.md for the artifact layout, checks,
-    trust model, and failure behavior.
+    Prepare and verify an offline Alpine APK repository bundle.
 
-The repository root is repository/; APK files and APKINDEX.tar.gz are stored
-under repository/x86_64/. The locally generated APK index is unsigned. Since
-APK requires accepting that local index, the isolated install test uses
---allow-untrusted; package archives are independently signature-verified
-before that test. The bundle is an offline package repository snapshot, not
-a bootable Alpine root filesystem or disk image.
+Disk hot-plugging creates a virtio-blk device through QEMU's QMP interface.
+The guest-side setup is executed through QEMU Guest Agent. The new disk is
+identified by its virtio serial, partitioned with sfdisk, formatted with
+mkfs.ext4, and mounted at the requested guest path.
 
-The one-shot prepare_alpine_bundle CLI command remains available for scripts.
-It starts and terminates its own GRML VM and reports phase-level progress.
-Package-manager output is collected when each guest command finishes; it is
-not streamed line by line during the operation.
-
-The tmux command boots GRML, waits for the shell prompt, types "tmux", and
-presses Enter. It keeps the VM running until Ctrl-C.
-
-REPL:
-  GRML_AGENT_REPL_FOCUS=true|false (default: true)
-    true  Switch the current Tmux client to the REPL session.
-    false Keep the client in the boot pane; switch manually with:
-          tmux switch-client -t grml
+The boot and tmux commands discover a GRML ISO in ./cdrom/ (or QEMU_ISO_DIR)
+unless --iso is supplied. The tmux command keeps the VM and host REPL alive
+until the REPL is stopped or Ctrl-C is pressed.
 
 Logging:
+  GRML_AGENT_REPL_FOCUS=true|false (default: true)
   XEPHYR_LOG_LEVEL=INFO|DEBUG|TRACE (default: INFO)
-
-Use DEBUG for lifecycle and queue diagnostics, or TRACE for per-frame OCR and
-stream timing details across grml.agent and xephyr.context. Diagnostics are
-written to stderr.

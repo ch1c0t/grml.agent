@@ -265,6 +265,216 @@ module GRML
       end
     end
   
+    module Storage
+      DISK_NAME_PATTERN = /\A[a-zA-Z0-9][a-zA-Z0-9._-]*\z/
+      DISK_SIZE_PATTERN = /\A[1-9][0-9]*(?:[KMGTP])?\z/i
+      DISK_FORMATS = ["qcow2", "raw"]
+      
+      def create_disk(name : String, size : String, format : String = "qcow2") : String
+        path = create_disk_image(name, size, format)
+      
+        begin
+          attach_disk(path, format)
+        rescue ex
+          File.delete(path) if File.exists?(path)
+          raise ex
+        end
+      
+        path
+      end
+      
+      def create_ext4_disk(
+        name : String,
+        size : String,
+        mountpoint : String? = nil,
+        format : String = "qcow2"
+      ) : String
+        validate_disk_name(name)
+        validate_disk_format(format)
+        guest_mountpoint = validate_guest_mountpoint(mountpoint || "/mnt/#{name}")
+      
+        path = create_disk_image(name, size, format)
+      
+        attached = begin
+          attach_disk_with_serial(path, format)
+        rescue ex
+          File.delete(path) if File.exists?(path)
+          raise ex
+        end
+      
+        begin
+          result = @interaction.execute(
+            ext4_provisioning_command(attached[:serial], guest_mountpoint),
+            2.minutes
+          )
+      
+          unless result.success?
+            details = [result.stdout.strip, result.stderr.strip].reject { |part| part.empty? }.join("\n")
+            message = "Guest provisioning command exited with status #{result.exit_code}"
+            message += ":\n#{details}" unless details.empty?
+            raise message
+          end
+        rescue ex
+          raise "Disk image #{path} remains attached as #{attached[:device_id]}, but guest partitioning, ext4 formatting, or mounting failed: #{ex.message}"
+        end
+      
+        "#{path} (ext4 mounted at #{guest_mountpoint})"
+      end
+      
+      def attach_disk(path : String, format : String = "qcow2") : String
+        attach_disk_with_serial(path, format)[:device_id]
+      end
+      
+      private def validate_disk_name(name : String) : Nil
+        unless name.matches?(DISK_NAME_PATTERN)
+          raise ArgumentError.new("Invalid disk name: #{name.inspect}")
+        end
+      end
+      
+      private def create_disk_image(name : String, size : String, format : String) : String
+        validate_disk_name(name)
+      
+        unless size.matches?(DISK_SIZE_PATTERN)
+          raise ArgumentError.new("Invalid disk size: #{size.inspect}; use e.g. 10G")
+        end
+        validate_disk_format(format)
+      
+        directory = File.expand_path("./disks")
+        Dir.mkdir_p(directory)
+        path = File.join(directory, "#{name}.#{format}")
+        raise "Disk already exists: #{path}" if File.exists?(path)
+      
+        output = IO::Memory.new
+        error = IO::Memory.new
+        result = Process.run("qemu-img", ["create", "-f", format, path, size], output: output, error: error)
+        unless result.success?
+          raise "qemu-img failed (#{result.exit_code}): #{error.to_s.strip}"
+        end
+      
+        path
+      end
+      
+      private def attach_disk_with_serial(
+        path : String,
+        format : String
+      ) : NamedTuple(device_id: String, serial: String)
+        validate_disk_format(format)
+        expanded_path = File.expand_path(path)
+        raise "Disk image does not exist: #{expanded_path}" unless File.file?(expanded_path)
+      
+        suffix = Random.rand(1..Int32::MAX)
+        file_node = "grml_disk_file_#{suffix}"
+        disk_node = "grml_disk_#{suffix}"
+        device_id = "grml_virtio_disk_#{suffix}"
+        serial = "grml-#{suffix}"
+      
+        file_arguments = JSON.parse({
+          "driver" => "file",
+          "filename" => expanded_path,
+          "node-name" => file_node,
+          "auto-read-only" => true
+        }.to_json).as_h
+        format_arguments = JSON.parse({
+          "driver" => format,
+          "file" => file_node,
+          "node-name" => disk_node
+        }.to_json).as_h
+      
+        execute_qmp_checked("blockdev-add", file_arguments)
+        begin
+          execute_qmp_checked("blockdev-add", format_arguments)
+          execute_qmp_checked("device_add", JSON.parse({
+            "driver" => "virtio-blk-pci",
+            "drive" => disk_node,
+            "id" => device_id,
+            "serial" => serial
+          }.to_json).as_h)
+        rescue ex
+          begin
+            execute_qmp_checked("blockdev-del", {"node-name" => JSON::Any.new(disk_node)})
+          rescue
+          end
+          begin
+            execute_qmp_checked("blockdev-del", {"node-name" => JSON::Any.new(file_node)})
+          rescue
+          end
+          raise ex
+        end
+      
+        {device_id: device_id, serial: serial}
+      end
+      
+      private def validate_guest_mountpoint(path : String) : String
+        unless path.starts_with?("/") && path != "/" && !path.split("/").any? { |part| part == "." || part == ".." }
+          raise ArgumentError.new("Mount point must be an absolute guest path without '.' or '..' components: #{path.inspect}")
+        end
+        path
+      end
+      
+      private def ext4_provisioning_command(serial : String, mountpoint : String) : String
+        disk = shell_quote("/dev/disk/by-id/virtio-#{serial}")
+        target = shell_quote(mountpoint)
+      
+        <<-SCRIPT
+          set -eu
+          disk=#{disk}
+          partition="$disk-part1"
+          mountpoint=#{target}
+      
+          for attempt in $(seq 1 50); do
+            [ -b "$disk" ] && break
+            sleep 0.1
+          done
+          if [ ! -b "$disk" ]; then
+            echo "Guest block device did not appear: $disk" >&2
+            exit 1
+          fi
+      
+          if mountpoint -q "$mountpoint"; then
+            echo "Guest mount point is already in use: $mountpoint" >&2
+            exit 1
+          fi
+      
+          printf 'label: gpt\\n, , L\\n' | sfdisk "$disk"
+          blockdev --rereadpt "$disk"
+          udevadm settle
+      
+          for attempt in $(seq 1 50); do
+            [ -b "$partition" ] && break
+            sleep 0.1
+          done
+          if [ ! -b "$partition" ]; then
+            echo "Guest partition did not appear: $partition" >&2
+            exit 1
+          fi
+      
+          mkfs.ext4 -F "$partition"
+          mkdir -p "$mountpoint"
+          mount -t ext4 "$partition" "$mountpoint"
+          findmnt -rn -t ext4 --target "$mountpoint" >/dev/null
+          printf 'Mounted %s on %s as ext4\\n' "$partition" "$mountpoint"
+        SCRIPT
+      end
+      
+      private def shell_quote(value : String) : String
+        "'" + value.gsub("'", "'\\''") + "'"
+      end
+      
+      private def validate_disk_format(format : String) : Nil
+        unless DISK_FORMATS.includes?(format)
+          raise ArgumentError.new("Unsupported disk format #{format.inspect}; choose qcow2 or raw")
+        end
+      end
+      
+      private def execute_qmp_checked(command : String, arguments : Hash(String, JSON::Any)) : JSON::Any
+        response = @vm.execute_qmp(command, arguments)
+        if error = response.as_h["error"]?
+          raise "QMP #{command} failed: #{error}"
+        end
+        response
+      end
+    end
+  
     module Terminate
       def terminate : Bool
         return true if @terminated
@@ -336,6 +546,7 @@ module GRML
     include Boot
     include VerifySharedDirectory
     include PrepareAlpineBundle
+    include Storage
     include Terminate
   end
 
@@ -556,11 +767,13 @@ module GRML
         end
         
         protected def perform(agent : GRML::Agent) : Nil
-          Log.info { "Starting tmux in the GRML shell" }
+          Log.info { "Starting tmux inside the GRML guest" }
           agent.interaction.type("tmux")
           agent.vm.send_key("ret")
-          Log.info { "GRML agent is running tmux. Press Ctrl-C to terminate the VM." }
-          sleep
+          sleep 500.milliseconds
+        
+          Log.info { "Starting the host-side GRML Tmux REPL" }
+          GRML::REPL.run(agent)
         end
       end
     end
@@ -572,37 +785,21 @@ module GRML
     
     def self.focus? : Bool
       value = ENV.fetch(FOCUS_ENV, "true").strip.downcase
-    
       case value
-      when "1", "true", "yes", "on"
-        true
-      when "0", "false", "no", "off"
-        false
-      else
-        raise ArgumentError.new("#{FOCUS_ENV} must be a boolean (true/false, yes/no, on/off, or 1/0); got #{value.inspect}")
+      when "1", "true", "yes", "on" then true
+      when "0", "false", "no", "off" then false
+      else raise ArgumentError.new("#{FOCUS_ENV} must be a boolean; got #{value.inspect}")
       end
     end
     
     def self.alpine_branch(arguments : Array(String)) : String
-      if arguments.size > 1
-        raise ArgumentError.new("Usage: prepare_alpine_bundle [alpine_branch]")
-      end
-    
+      raise ArgumentError.new("Usage: prepare_alpine_bundle [alpine_branch]") if arguments.size > 1
       branch = arguments.first? || DEFAULT_ALPINE_BRANCH
-      unless branch =~ /\A[a-zA-Z0-9._-]+\z/
-        raise ArgumentError.new("Invalid Alpine branch: #{branch.inspect}")
-      end
-    
+      raise ArgumentError.new("Invalid Alpine branch: #{branch.inspect}") unless branch =~ /\A[a-zA-Z0-9._-]+\z/
       branch
     end
     
-    # Keep this operation on the existing agent. The caller may invoke it
-    # repeatedly without creating another VM or reconnecting to the guest.
-    def self.prepare_alpine_bundle(
-      agent : T,
-      arguments : Array(String),
-      progress : Proc(String, Nil)? = nil
-    ) : String forall T
+    def self.prepare_alpine_bundle(agent : T, arguments : Array(String), progress : Proc(String, Nil)? = nil) : String forall T
       branch = alpine_branch(arguments)
       agent.prepare_alpine_bundle(branch, progress)
       "Prepared Alpine offline bundle (branch: #{branch})."
@@ -612,23 +809,65 @@ module GRML
       TmuxREPL.define("grml") do |repl|
         repl.on_command("ocr") do |context, arguments|
           raise ArgumentError.new("Usage: ocr") unless arguments.empty?
-    
           result = agent.interaction.latest_ocr
           if error = result.error
             raise "OCR failed for frame #{result.timestamp}: #{error}"
           end
+          result.text.strip.empty? ? context.puts("(no text recognized)") : context.write(result.text)
+        end
     
-          if result.text.strip.empty?
-            context.puts("(no text recognized)")
-          else
-            context.write(result.text)
-          end
+        repl.on_command("guest_exec") do |context, arguments|
+          raise ArgumentError.new("Usage: guest_exec <shell command>") if arguments.empty?
+    
+          command = arguments.join(" ")
+          result = agent.interaction.execute(command, 2.minutes)
+          context.write(result.stdout) unless result.stdout.empty?
+          context.write(result.stderr) unless result.stderr.empty?
+          context.puts("Guest command exited with status #{result.exit_code}") unless result.success?
         end
     
         repl.on_command("prepare_alpine_bundle") do |context, arguments|
           progress = ->(message : String) { context.puts(message) }
           GRML::REPL.prepare_alpine_bundle(agent, arguments, progress)
           nil
+        end
+    
+        repl.on_command("create_disk") do |context, arguments|
+          unless (2..3).includes?(arguments.size)
+            raise ArgumentError.new("Usage: create_disk <name> <size> [qcow2|raw]")
+          end
+          format = arguments[2]? || "qcow2"
+          path = agent.create_disk(arguments[0], arguments[1], format)
+          context.puts("Created and attached #{path}")
+        end
+    
+        repl.on_command("attach_disk") do |context, arguments|
+          unless (1..2).includes?(arguments.size)
+            raise ArgumentError.new("Usage: attach_disk <path> [qcow2|raw]")
+          end
+          format = arguments[1]? || "qcow2"
+          device_id = agent.attach_disk(arguments[0], format)
+          context.puts("Attached #{File.expand_path(arguments[0])} as #{device_id}")
+        end
+    
+        repl.on_command("create_ext4_disk") do |context, arguments|
+          unless (2..4).includes?(arguments.size)
+            raise ArgumentError.new("Usage: create_ext4_disk <name> <size> [mountpoint] [qcow2|raw]")
+          end
+    
+          mountpoint = nil
+          format = "qcow2"
+          if optional = arguments[2]?
+            if optional == "qcow2" || optional == "raw"
+              format = optional
+            else
+              mountpoint = optional
+              format = arguments[3]? || "qcow2"
+            end
+          end
+    
+          result = agent.create_ext4_disk(arguments[0], arguments[1], mountpoint, format)
+          context.puts("Created, partitioned, formatted, and mounted #{result}")
         end
       end
     end
@@ -658,13 +897,11 @@ module GRML
         focus = focus?
         definition.start(focus: focus)
         started = true
-    
         if focus
-          Log.info { "GRML REPL started in session 'grml'." }
+          Log.info { "Host-side GRML REPL started in session 'grml'." }
         else
-          Log.info { "GRML REPL started in session 'grml'; switch to it with: tmux switch-client -t grml" }
+          Log.info { "Host-side GRML REPL started in session 'grml'; switch to it with: tmux switch-client -t grml" }
         end
-    
         definition.serve
       ensure
         definition.stop if started
