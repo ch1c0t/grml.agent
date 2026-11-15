@@ -20,6 +20,10 @@ grml.agent tmux starts tmux inside the guest and a separate host-side
 Tmux REPL attached to the same running VM. The host REPL provides:
 
 - ocr — recognize text in the latest guest display frame.
+- guest_exec <shell command> — execute a shell command inside GRML through
+  QEMU Guest Agent and return its stdout/stderr to the host REPL. The command
+  runs as root in the guest. Quote a complete command string when it contains
+  spaces or shell operators.
 - create_disk <name> <size> [qcow2|raw] — create an image under ./disks/
   and hot-attach it as a virtio block device.
 - attach_disk <path> [qcow2|raw] — hot-attach an existing image.
@@ -36,6 +40,7 @@ Example host REPL commands:
     attach_disk ./disks/existing.qcow2
     create_ext4_disk workspace 8G
     create_ext4_disk data 20G /mnt/data raw
+    guest_exec 'lsblk -f; blkid -p /dev/vda1; file -s /dev/vda1'
     ocr
 
 The create_ext4_disk command runs host-side image creation and QMP

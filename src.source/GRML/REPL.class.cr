@@ -34,6 +34,16 @@ def self.build_definition(agent : T) : TmuxREPL::Definition forall T
       result.text.strip.empty? ? context.puts("(no text recognized)") : context.write(result.text)
     end
 
+    repl.on_command("guest_exec") do |context, arguments|
+      raise ArgumentError.new("Usage: guest_exec <shell command>") if arguments.empty?
+
+      command = arguments.join(" ")
+      result = agent.interaction.execute(command, 2.minutes)
+      context.write(result.stdout) unless result.stdout.empty?
+      context.write(result.stderr) unless result.stderr.empty?
+      context.puts("Guest command exited with status #{result.exit_code}") unless result.success?
+    end
+
     repl.on_command("prepare_alpine_bundle") do |context, arguments|
       progress = ->(message : String) { context.puts(message) }
       GRML::REPL.prepare_alpine_bundle(agent, arguments, progress)

@@ -12,6 +12,9 @@ Tmux REPL connected to the same running VM. The host REPL supports:
 
   ocr
     Recognize text in the latest captured guest display frame.
+  guest_exec <shell command>
+    Execute a shell command inside the GRML guest through QEMU Guest Agent.
+    Output and exit status are returned to the host REPL. Commands run as root.
   create_disk <name> <size> [qcow2|raw]
     Create a disk image under ./disks/ and hot-attach it to the running VM.
     Example: create_disk data 20G

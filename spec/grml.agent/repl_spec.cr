@@ -11,9 +11,26 @@ struct FakeGRMLOCRResult
   end
 end
 
+struct FakeGRMLCommandResult
+  getter exit_code : Int32
+  getter stdout : String
+  getter stderr : String
+
+  def initialize(@exit_code : Int32 = 0, @stdout : String = "", @stderr : String = "")
+  end
+
+  def success? : Bool
+    @exit_code == 0
+  end
+end
+
 class FakeGRMLInteraction
   def latest_ocr : FakeGRMLOCRResult
     FakeGRMLOCRResult.new
+  end
+
+  def execute(command : String, timeout : Time::Span = 30.seconds) : FakeGRMLCommandResult
+    FakeGRMLCommandResult.new(0, "guest output\n")
   end
 end
 
@@ -107,6 +124,7 @@ describe GRML::REPL do
       "attach_disk",
       "create_disk",
       "create_ext4_disk",
+      "guest_exec",
       "ocr",
       "prepare_alpine_bundle",
     ])
