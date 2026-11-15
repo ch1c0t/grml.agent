@@ -12,4 +12,5 @@ end
 include Boot
 include VerifySharedDirectory
 include PrepareAlpineBundle
+include Storage
 include Terminate

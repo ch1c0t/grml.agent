@@ -1,21 +1,8 @@
 # grml.agent
 
-A Crystal application that boots a GRML live system in QEMU and exposes its
-screen and guest operations through a tmux REPL. It also prepares verified
-offline Alpine APK repository bundles.
-
-## Requirements
-
-- Crystal 1.22 or newer
-- QEMU plus the `xephyr.run` and `xephyr.kill` executables provided by
-  [xephyr.context](https://github.com/ch1c0t/xephyr.context)
-- Tesseract OCR with English language data
-- A running LavinMQ instance configured for
-  [global-amqp_channel](https://github.com/ch1c0t/crystal.global-amqp_channel)
-- tmux and the guest-side GRML utilities used by the boot workflow
-
-The reusable VM and display interaction implementation is provided by
-[ch1c0t/crystal.qemu](https://github.com/ch1c0t/crystal.qemu).
+A Crystal application that boots a GRML live system in QEMU, provides a
+host-side Tmux REPL for guest operations, and prepares verified offline
+Alpine APK repository bundles.
 
 ## Build
 
@@ -33,33 +20,36 @@ bundle exec rake
 ./bin/grml.agent prepare_alpine_bundle [alpine_branch]
 ```
 
+`grml.agent tmux` starts tmux inside the guest and a separate host-side
+Tmux REPL attached to the same running VM. The host REPL provides:
+
+- `ocr` — recognize text in the latest guest display frame.
+- `create_disk <name> <size> [qcow2|raw]` — create an image under
+  `./disks/` and hot-attach it as a virtio block device.
+- `attach_disk <path> [qcow2|raw]` — hot-attach an existing image.
+- `prepare_alpine_bundle [alpine_branch]` — create and verify an offline
+  Alpine APK repository bundle.
+
+Example host REPL commands:
+
+```text
+create_disk data 20G
+attach_disk ./disks/existing.qcow2
+ocr
+```
+
+Hot-attached disks should appear as new block devices in GRML (for example,
+`/dev/vdb`). Partitioning and formatting are intentionally separate guest
+operations; adding a device does not automatically modify its contents.
+
 When `--iso` is omitted, GRML ISO discovery uses `./cdrom/` when that
-directory exists; otherwise it uses `~/Downloads/ISOs/`. Set
-`QEMU_ISO_DIR` to choose a different discovery directory.
+directory exists; otherwise it uses `~/Downloads/ISOs/`. Set `QEMU_ISO_DIR`
+to choose a different discovery directory.
 
-- `boot` waits for the GRML shell, verifies QEMU Guest Agent command
-  execution and the host/guest shared directory, configures the console, and
-  starts the `grml` REPL.
-- `tmux` boots GRML, starts the guest's tmux directly, and keeps the VM
-  running until Ctrl-C.
-- `prepare_alpine_bundle` runs the offline-bundle workflow in a temporary
-  GRML VM, then terminates that VM.
+The offline-bundle workflow stores immutable runs beneath
+`/mnt/shared/alpine-bundles/runs/`. See
+[docs/alpine-offline-bundle.md](docs/alpine-offline-bundle.md) for details.
 
-The REPL provides `ocr` and `prepare_alpine_bundle [alpine_branch]`.
-The latter stores immutable runs beneath
-`/mnt/shared/alpine-bundles/runs/`, verifies APK signatures and the offline
-installation, writes a manifest and checksums, and updates `LATEST` only
-after all checks pass. See
-[docs/alpine-offline-bundle.md](docs/alpine-offline-bundle.md) for the
-artifact format and trust model.
-
-Set `GRML_AGENT_REPL_FOCUS=false` to keep the current tmux client in the boot
-pane and switch manually with `tmux switch-client -t grml`. Use
+Set `GRML_AGENT_REPL_FOCUS=false` to keep the host tmux client in its current
+session and switch manually with `tmux switch-client -t grml`. Use
 `XEPHYR_LOG_LEVEL=DEBUG` or `TRACE` for diagnostics.
-
-## Scope
-
-The `create_alpine_image` command from the original monorepo was an
-unimplemented stub and is intentionally not exposed here. The custom Alpine
-ISO workflow will be added when its upstream `mkimage`-based implementation
-is ready.
