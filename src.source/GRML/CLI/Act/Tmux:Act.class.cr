@@ -13,7 +13,7 @@ protected def perform(agent : GRML::Agent) : Nil
   Log.info { "Starting tmux inside the GRML guest" }
   agent.interaction.type("tmux")
   agent.vm.send_key("ret")
-  sleep 0.5
+  sleep 500.milliseconds
 
   Log.info { "Starting the host-side GRML Tmux REPL" }
   GRML::REPL.run(agent)
