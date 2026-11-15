@@ -17,12 +17,17 @@ Tmux REPL connected to the same running VM. The host REPL supports:
     Example: create_disk data 20G
   attach_disk <path> [qcow2|raw]
     Hot-attach an existing disk image to the running VM.
+  create_ext4_disk <name> <size> [mountpoint] [qcow2|raw]
+    Create and hot-attach a disk image, create a GPT partition, format it
+    as ext4, and mount it inside the GRML guest. The default mount point is
+    /mnt/<name>. Example: create_ext4_disk data 20G /mnt/data
   prepare_alpine_bundle [alpine_branch]
     Prepare and verify an offline Alpine APK repository bundle.
 
 Disk hot-plugging creates a virtio-blk device through QEMU's QMP interface.
-The guest should detect it as a new block device (for example, /dev/vdb);
-partitioning and formatting remain explicit guest-side operations.
+The guest-side setup is executed through QEMU Guest Agent. The new disk is
+identified by its virtio serial, partitioned with sfdisk, formatted with
+mkfs.ext4, and mounted at the requested guest path.
 
 The boot and tmux commands discover a GRML ISO in ./cdrom/ (or QEMU_ISO_DIR)
 unless --iso is supplied. The tmux command keeps the VM and host REPL alive
