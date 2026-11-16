@@ -49,6 +49,8 @@ describe GRML::Agent::PrepareDebCache do
     command.should contain("CacheDir: /mnt/shared/deb-cache/proxy")
     command.should contain("zzzz-grml-agent.conf")
     command.should contain("BindAddress: 127.0.0.1")
+    command.should contain("ReportPage: acng-report.html")
+    command.should contain("runuser -u apt-cacher-ng -- test -w")
     command.should contain("ConditionPathIsMountPoint=/mnt/shared")
     command.should contain("WorkingDirectory=/mnt/shared/deb-cache/proxy")
     command.should contain("ReadWritePaths=/mnt/shared/deb-cache/proxy")
