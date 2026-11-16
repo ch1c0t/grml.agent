@@ -104,9 +104,7 @@ def verify_deb_cache(package : String = "hello", progress : Proc(String, Nil)? =
     report_deb_cache_verification_stage(3, "Disabling upstream access", progress) do
       command = <<-BASH
         set -eu
-        cat > '#{offline_config}' <<'EOF'
-        Offlinemode: 1
-        EOF
+        printf '%s\\n' 'Offlinemode: 1' > '#{offline_config}'
 
         systemctl restart apt-cacher-ng
         ready=0
