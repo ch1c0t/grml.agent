@@ -34,7 +34,11 @@ The service drop-in is needed because Debian's apt-cacher-ng service
 restricts its writable paths. It deliberately does not set
 `WorkingDirectory` to the 9p mount: doing so makes systemd add mount-unit
 dependencies for that path, while GRML mounts the shared directory directly.
-The cache remains in the shared directory when the GRML VM is shut down.
+The generated apt-cacher-ng, systemd, APT, and profile configuration files
+are written with `printf` rather than nested shell heredocs. This avoids
+heredoc terminators becoming file contents when commands are embedded in
+Crystal's own heredocs. The cache remains in the shared directory when the
+GRML VM is shut down.
 
 ## Package version behavior
 
