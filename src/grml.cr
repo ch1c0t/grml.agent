@@ -265,6 +265,237 @@ module GRML
       end
     end
   
+    module PrepareDebCache
+      DEB_CACHE_DIRECTORY = "/mnt/shared/deb-cache"
+      DEB_CACHE_PROXY_URL = "http://127.0.0.1:3142"
+      
+      def prepare_deb_cache(progress : Proc(String, Nil)? = nil) : Nil
+        started_at = Time.instant
+        report_deb_cache_progress(progress, "Preparing shared Debian package cache")
+      
+        report_deb_cache_stage(1, "Checking the shared directory", progress) do
+          command = <<-BASH
+            set -eu
+            if ! mountpoint -q /mnt/shared; then
+              echo "The QEMU shared directory is not mounted at /mnt/shared" >&2
+              exit 20
+            fi
+            probe=$(mktemp /mnt/shared/.grml-agent-deb-cache.XXXXXX)
+            rm -f "$probe"
+            df -h /mnt/shared | tail -n 1
+          BASH
+          run_deb_cache_command(command)
+        end
+      
+        report_deb_cache_stage(2, "Checking or installing apt-cacher-ng", progress) do
+          command = <<-BASH
+            set -eu
+            if dpkg-query -W -f='${Status}\n' apt-cacher-ng 2>/dev/null | grep -qx 'install ok installed'; then
+              echo "apt-cacher-ng is already installed"
+            else
+              echo "Installing apt-cacher-ng; this first installation requires network access"
+              export DEBIAN_FRONTEND=noninteractive
+              apt-get -o Acquire::http::Proxy=DIRECT update
+              apt-get -o Acquire::http::Proxy=DIRECT install -y --no-install-recommends apt-cacher-ng
+              echo "apt-cacher-ng installation completed"
+            fi
+          BASH
+          run_deb_cache_command(command, 5.minutes)
+        end
+      
+        report_deb_cache_stage(3, "Preparing persistent cache storage", progress) do
+          command = <<-BASH
+            set -eu
+            cache_path='#{DEB_CACHE_DIRECTORY}/proxy'
+            service_dropin="/etc/systemd/system/apt-cacher-ng.service.d/grml-shared-cache.conf"
+      
+            mkdir -p "$cache_path"
+            install -d -o apt-cacher-ng -g apt-cacher-ng -m 0755 "$cache_path"
+      
+            # Load after Debian's zz_debconf.conf so this CacheDir takes precedence.
+            rm -f /etc/apt-cacher-ng/90-grml-agent.conf
+            printf '%s\\n' \\
+              'CacheDir: /mnt/shared/deb-cache/proxy' \\
+              'BindAddress: 127.0.0.1' \\
+              'ReportPage: acng-report.html' \\
+              > /etc/apt-cacher-ng/zzzz-grml-agent.conf
+      
+            # Debian's service restricts writable paths. Permit the persistent
+            # shared cache and prevent startup before the 9p mount exists.
+            mkdir -p "$(dirname "$service_dropin")"
+            printf '%s\\n' \\
+              '[Unit]' \\
+              'ConditionPathIsMountPoint=/mnt/shared' \\
+              '' \\
+              '[Service]' \\
+              'ReadWritePaths=/mnt/shared/deb-cache/proxy' \\
+              > "$service_dropin"
+      
+            if ! runuser -u apt-cacher-ng -- test -w "$cache_path"; then
+              echo "apt-cacher-ng cannot write to shared cache directory: $cache_path" >&2
+              exit 22
+            fi
+      
+            printf 'Cache directory: %s\n' "$cache_path"
+            echo "apt-cacher-ng service-user write access: OK"
+          BASH
+          run_deb_cache_command(command)
+        end
+      
+        report_deb_cache_stage(4, "Configuring APT and grml-live", progress) do
+          command = <<-BASH
+            set -eu
+            proxy_url='#{DEB_CACHE_PROXY_URL}'
+      
+            printf '%s\\n' 'Acquire::http::Proxy "http://127.0.0.1:3142";' \\
+              > /etc/apt/apt.conf.d/90-grml-agent-deb-cache
+      
+            mkdir -p /etc/profile.d
+            printf '%s\\n' 'export APT_PROXY="http://127.0.0.1:3142"' \\
+              > /etc/profile.d/90-grml-agent-deb-cache.sh
+            chmod 0644 /etc/apt/apt.conf.d/90-grml-agent-deb-cache /etc/profile.d/90-grml-agent-deb-cache.sh
+      
+            if [ -f /etc/environment ]; then
+              sed -i '/^APT_PROXY=/d' /etc/environment
+            fi
+            printf 'APT_PROXY=%s\n' "$proxy_url" >> /etc/environment
+      
+            printf 'APT HTTP proxy: %s\nAPT_PROXY: %s\n' "$proxy_url" "$proxy_url"
+          BASH
+          run_deb_cache_command(command)
+        end
+      
+        report_deb_cache_stage(5, "Starting apt-cacher-ng", progress) do
+          command = <<-BASH
+            set -eu
+            # A forced VM shutdown during verify_deb_cache can leave its temporary
+            # offline-mode override behind. Always restore normal upstream access
+            # when preparing the cache after a boot.
+            rm -f '/etc/apt-cacher-ng/zzzzzz-grml-agent-verify.conf'
+            systemctl daemon-reload
+      
+            diagnose_start_failure() {
+              systemctl --no-pager --full status apt-cacher-ng.service >&2 || true
+              journalctl -u apt-cacher-ng.service -b -n 80 --no-pager >&2 || true
+      
+              for log_file in /var/log/apt-cacher-ng/*.err; do
+                if [ -f "$log_file" ]; then
+                  echo "----- $log_file -----" >&2
+                  tail -n 80 "$log_file" >&2 || true
+                fi
+              done
+            }
+      
+            if ! systemctl restart apt-cacher-ng.service; then
+              diagnose_start_failure
+              echo "apt-cacher-ng could not be restarted" >&2
+              exit 24
+            fi
+      
+            if ! systemctl is-active --quiet apt-cacher-ng.service; then
+              diagnose_start_failure
+              echo "apt-cacher-ng did not remain active after restart" >&2
+              exit 25
+            fi
+      
+            systemctl is-active apt-cacher-ng.service
+          BASH
+          run_deb_cache_command(command, 45.seconds)
+        end
+      
+        report_deb_cache_stage(6, "Checking proxy readiness", progress) do
+          command = <<-BASH
+            set -eu
+            ready=0
+            for attempt in $(seq 1 15); do
+              if systemctl is-active --quiet apt-cacher-ng &&
+                 curl -fsS --max-time 2 http://127.0.0.1:3142/acng-report.html >/dev/null 2>&1; then
+                ready=1
+                break
+              fi
+              sleep 1
+            done
+      
+            if [ "$ready" -ne 1 ]; then
+              systemctl --no-pager --full status apt-cacher-ng >&2 || true
+              journalctl -u apt-cacher-ng -n 40 --no-pager >&2 || true
+              echo "apt-cacher-ng did not become ready on 127.0.0.1:3142" >&2
+              exit 21
+            fi
+      
+            echo "Service: active"
+            echo "Report endpoint: http://127.0.0.1:3142/acng-report.html (HTTP OK)"
+          BASH
+          run_deb_cache_command(command, 30.seconds)
+        end
+      
+        report_deb_cache_stage(7, "Reporting cache status", progress) do
+          command = <<-BASH
+            set -eu
+            cache_path='#{DEB_CACHE_DIRECTORY}/proxy'
+            package_count=$(find "$cache_path" -type f -name '*.deb' | wc -l | tr -d '[:space:]')
+            cache_size=$(du -sh "$cache_path" | cut -f1)
+            free_bytes=$(df -PB1 /mnt/shared | awk 'NR == 2 {print $4}')
+            proxy_setting=$(apt-config dump | awk -F '"' '/Acquire::http::Proxy / {print $2; exit}')
+            environment_proxy=$(sed -n 's/^APT_PROXY=//p' /etc/environment | tail -n 1)
+      
+            printf 'Cache directory: %s\nCached .deb archives: %s\nCache size: %s\nShared filesystem free: %s bytes\nService: %s\nAPT HTTP proxy: %s\nAPT_PROXY in /etc/environment: %s\nPackage cache verification: not run (use verify_deb_cache [package])\n' \
+              "$cache_path" "$package_count" "$cache_size" "$free_bytes" \
+              "$(systemctl is-active apt-cacher-ng)" "$proxy_setting" "$environment_proxy"
+          BASH
+          run_deb_cache_command(command)
+        end
+      
+        elapsed = Time.instant - started_at
+        report_deb_cache_progress(progress, "Shared Debian package cache is ready")
+        report_deb_cache_progress(progress, "Package reuse is not yet verified; run verify_deb_cache [package]")
+        report_deb_cache_progress(progress, "Total preparation time: #{elapsed.total_seconds.round(1)}s")
+      end
+      
+      private def report_deb_cache_stage(
+        index : Int32,
+        title : String,
+        progress : Proc(String, Nil)?,
+        &block : -> String
+      ) : Nil
+        label = "[#{index}/7] #{title}"
+        started_at = Time.instant
+        report_deb_cache_progress(progress, "#{label} ...")
+      
+        begin
+          details = yield
+        rescue ex
+          elapsed = Time.instant - started_at
+          report_deb_cache_progress(progress, "#{label} FAILED (#{elapsed.total_seconds.round(1)}s)")
+          raise "Failed during #{title}: #{ex.message}"
+        end
+      
+        elapsed = Time.instant - started_at
+        report_deb_cache_progress(progress, "#{label} done (#{elapsed.total_seconds.round(1)}s)")
+        report_deb_cache_progress(progress, details) unless details.empty?
+      end
+      
+      private def run_deb_cache_command(
+        command : String,
+        timeout : Time::Span = 30.seconds
+      ) : String
+        result = @interaction.execute(command, timeout)
+        unless result.success?
+          raise "Guest command failed (exit=#{result.exit_code}):\n#{result.stderr}\n#{result.stdout}"
+        end
+      
+        [result.stdout.strip, result.stderr.strip].reject(&.empty?).join("\n")
+      end
+      
+      private def report_deb_cache_progress(progress : Proc(String, Nil)?, message : String) : Nil
+        if callback = progress
+          callback.call(message)
+        else
+          Log.info { message }
+        end
+      end
+    end
+  
     module Storage
       module Private
         private def validate_disk_name(name : String) : Nil
@@ -507,6 +738,305 @@ module GRML
       end
     end
   
+    module VerifyDebCache
+      DEB_CACHE_VERIFY_OFFLINE_CONFIG = "/etc/apt-cacher-ng/zzzzzz-grml-agent-verify.conf"
+      
+      def verify_deb_cache(package : String = "hello", progress : Proc(String, Nil)? = nil) : Nil
+        unless package.matches?(/\A[a-z0-9][a-z0-9+.-]*\z/)
+          raise ArgumentError.new("Invalid Debian package name: #{package.inspect}")
+        end
+      
+        started_at = Time.instant
+        run_id = Random.rand(0_i64..Int64::MAX).to_s
+        work_directory = "/tmp/grml-agent-deb-cache-verify-#{run_id}"
+        offline_config = DEB_CACHE_VERIFY_OFFLINE_CONFIG
+        offline_mode_may_be_enabled = false
+      
+        report_deb_cache_verification_progress(progress, "Verifying shared Debian package cache")
+        report_deb_cache_verification_progress(progress, "Package: #{package}")
+      
+        begin
+          report_deb_cache_verification_stage(1, "Checking proxy and APT configuration", progress) do
+            command = <<-BASH
+              set -eu
+              if ! mountpoint -q /mnt/shared; then
+                echo "The QEMU shared directory is not mounted at /mnt/shared" >&2
+                exit 20
+              fi
+      
+              if ! runuser -u apt-cacher-ng -- test -w /mnt/shared/deb-cache/proxy; then
+                echo "apt-cacher-ng cannot write to /mnt/shared/deb-cache/proxy" >&2
+                exit 22
+              fi
+      
+              # Recover from an interrupted verification before starting a new one.
+              rm -f '#{offline_config}'
+              systemctl restart apt-cacher-ng
+      
+              if ! apt-config dump | grep -Fqx 'Acquire::http::Proxy "http://127.0.0.1:3142";'; then
+                echo "APT is not configured to use the shared-cache proxy" >&2
+                exit 23
+              fi
+      
+              ready=0
+              for attempt in $(seq 1 15); do
+                if systemctl is-active --quiet apt-cacher-ng &&
+                   curl -fsS --max-time 2 http://127.0.0.1:3142/acng-report.html >/dev/null 2>&1; then
+                  ready=1
+                  break
+                fi
+                sleep 1
+              done
+      
+              if [ "$ready" -ne 1 ]; then
+                systemctl --no-pager --full status apt-cacher-ng >&2 || true
+                journalctl -u apt-cacher-ng -n 40 --no-pager >&2 || true
+                echo "apt-cacher-ng is not ready" >&2
+                exit 21
+              fi
+      
+              echo "APT HTTP proxy and apt-cacher-ng are ready"
+            BASH
+            run_deb_cache_verification_command(command)
+          end
+      
+          report_deb_cache_verification_stage(2, "Downloading the current package version", progress) do
+            command = <<-BASH
+              set -eu
+              work_directory='#{work_directory}'
+              package='#{package}'
+              mkdir -m 0700 -p "$work_directory/online" "$work_directory/offline"
+      
+              apt-get update
+              version=$(apt-cache policy "$package" | awk '/Candidate:/ {print $2; exit}')
+              if [ -z "$version" ] || [ "$version" = "(none)" ]; then
+                echo "No candidate version is available for package: $package" >&2
+                exit 40
+              fi
+      
+              download_log="$work_directory/online/download.log"
+              if ! (cd "$work_directory/online" && apt-get download "$package=$version") >"$download_log" 2>&1; then
+                cat "$download_log" >&2
+                exit 41
+              fi
+              cat "$download_log"
+      
+              if ! grep -Eq 'Get:[[:space:]]*[0-9]+[[:space:]]+http://' "$download_log"; then
+                echo "The package was not fetched from an HTTP repository; this HTTP cache cannot verify HTTPS package payloads" >&2
+                exit 42
+              fi
+      
+              archive=$(find "$work_directory/online" -maxdepth 1 -type f -name '*.deb' -print -quit)
+              if [ -z "$archive" ]; then
+                echo "APT completed without producing a .deb archive" >&2
+                exit 43
+              fi
+      
+              checksum=$(sha256sum "$archive" | awk '{print $1}')
+              bytes=$(stat -c '%s' "$archive")
+              printf '%s\n%s\n' "$version" "$checksum" > "$work_directory/metadata"
+              printf 'Package: %s\nVersion: %s\nFirst download SHA-256: %s\nArchive size: %s bytes\n' \
+                "$package" "$version" "$checksum" "$bytes"
+            BASH
+            run_deb_cache_verification_command(command, 10.minutes)
+          end
+      
+          offline_mode_may_be_enabled = true
+          report_deb_cache_verification_stage(3, "Disabling upstream access", progress) do
+            command = <<-BASH
+              set -eu
+              printf '%s\\n' 'Offlinemode: 1' > '#{offline_config}'
+      
+              systemctl restart apt-cacher-ng
+              ready=0
+              for attempt in $(seq 1 15); do
+                if systemctl is-active --quiet apt-cacher-ng &&
+                   curl -fsS --max-time 2 http://127.0.0.1:3142/acng-report.html >/dev/null 2>&1; then
+                  ready=1
+                  break
+                fi
+                sleep 1
+              done
+      
+              if [ "$ready" -ne 1 ]; then
+                systemctl --no-pager --full status apt-cacher-ng >&2 || true
+                journalctl -u apt-cacher-ng -n 40 --no-pager >&2 || true
+                echo "apt-cacher-ng did not restart in offline mode" >&2
+                exit 44
+              fi
+      
+              echo "apt-cacher-ng is active with Offlinemode: 1"
+            BASH
+            run_deb_cache_verification_command(command, 30.seconds)
+          end
+      
+          report_deb_cache_verification_stage(4, "Fetching the same version with upstream disabled", progress) do
+            command = <<-BASH
+              set -eu
+              work_directory='#{work_directory}'
+              package='#{package}'
+              version=$(sed -n '1p' "$work_directory/metadata")
+              expected_checksum=$(sed -n '2p' "$work_directory/metadata")
+              download_log="$work_directory/offline/download.log"
+      
+              if [ -z "$version" ] || [ -z "$expected_checksum" ]; then
+                echo "Missing metadata from the first package download" >&2
+                exit 45
+              fi
+      
+              if ! (cd "$work_directory/offline" && apt-get download "$package=$version") >"$download_log" 2>&1; then
+                cat "$download_log" >&2
+                echo "The package was not available from the cache while upstream access was disabled" >&2
+                exit 46
+              fi
+              cat "$download_log"
+      
+              if ! grep -Eq 'Get:[[:space:]]*[0-9]+[[:space:]]+http://' "$download_log"; then
+                echo "The offline package request did not use an HTTP repository URL" >&2
+                exit 47
+              fi
+      
+              archive=$(find "$work_directory/offline" -maxdepth 1 -type f -name '*.deb' -print -quit)
+              if [ -z "$archive" ]; then
+                echo "Offline APT download completed without producing a .deb archive" >&2
+                exit 48
+              fi
+      
+              actual_checksum=$(sha256sum "$archive" | awk '{print $1}')
+              if [ "$actual_checksum" != "$expected_checksum" ]; then
+                echo "Cached package checksum does not match the first download" >&2
+                echo "Expected: $expected_checksum" >&2
+                echo "Actual:   $actual_checksum" >&2
+                exit 49
+              fi
+      
+              printf 'Offline download SHA-256: %s\nCache verification: PASS (upstream disabled)\n' \
+                "$actual_checksum"
+            BASH
+            run_deb_cache_verification_command(command, 5.minutes)
+          end
+      
+          report_deb_cache_verification_stage(5, "Restoring normal proxy mode", progress) do
+            result = run_deb_cache_verification_command(restore_deb_cache_proxy_command(offline_config), 30.seconds)
+            offline_mode_may_be_enabled = false
+            result
+          end
+      
+          elapsed = Time.instant - started_at
+          report_deb_cache_verification_progress(progress, "Shared Debian package cache verified for #{package}")
+          report_deb_cache_verification_progress(progress, "The same package version was downloaded successfully with upstream access disabled")
+          report_deb_cache_verification_progress(progress, "Total verification time: #{elapsed.total_seconds.round(1)}s")
+        rescue ex
+          report_deb_cache_verification_progress(progress, "Package cache verification FAILED: #{ex.message}")
+          raise ex
+        ensure
+          if offline_mode_may_be_enabled
+            begin
+              cleanup_result = @interaction.execute(restore_deb_cache_proxy_command(offline_config), 30.seconds)
+              if cleanup_result.success?
+                report_deb_cache_verification_progress(progress, "Restored normal apt-cacher-ng mode after verification failure")
+              else
+                report_deb_cache_verification_progress(
+                  progress,
+                  "WARNING: could not restore apt-cacher-ng online mode: #{cleanup_result.stderr}\n#{cleanup_result.stdout}"
+                )
+              end
+            rescue cleanup_error
+              report_deb_cache_verification_progress(
+                progress,
+                "WARNING: could not restore apt-cacher-ng online mode: #{cleanup_error.message}"
+              )
+            end
+          end
+      
+          begin
+            cleanup_result = @interaction.execute("rm -rf '#{work_directory}'", 30.seconds)
+            unless cleanup_result.success?
+              report_deb_cache_verification_progress(progress, "WARNING: could not remove verification directory #{work_directory}")
+            end
+          rescue cleanup_error
+            report_deb_cache_verification_progress(
+              progress,
+              "WARNING: could not remove verification directory #{work_directory}: #{cleanup_error.message}"
+            )
+          end
+        end
+      end
+      
+      private def restore_deb_cache_proxy_command(offline_config : String) : String
+        <<-BASH
+          set -eu
+          rm -f '#{offline_config}'
+          systemctl restart apt-cacher-ng
+      
+          ready=0
+          for attempt in $(seq 1 15); do
+            if systemctl is-active --quiet apt-cacher-ng &&
+               curl -fsS --max-time 2 http://127.0.0.1:3142/acng-report.html >/dev/null 2>&1; then
+              ready=1
+              break
+            fi
+            sleep 1
+          done
+      
+          if [ "$ready" -ne 1 ]; then
+            systemctl --no-pager --full status apt-cacher-ng >&2 || true
+            journalctl -u apt-cacher-ng -n 40 --no-pager >&2 || true
+            echo "apt-cacher-ng did not return to online mode" >&2
+            exit 50
+          fi
+      
+          echo "apt-cacher-ng is active with normal upstream access"
+        BASH
+      end
+      
+      private def report_deb_cache_verification_stage(
+        index : Int32,
+        title : String,
+        progress : Proc(String, Nil)?,
+        &block : -> String
+      ) : Nil
+        label = "[#{index}/5] #{title}"
+        started_at = Time.instant
+        report_deb_cache_verification_progress(progress, "#{label} ...")
+      
+        begin
+          details = yield
+        rescue ex
+          elapsed = Time.instant - started_at
+          report_deb_cache_verification_progress(progress, "#{label} FAILED (#{elapsed.total_seconds.round(1)}s)")
+          raise "Failed during #{title}: #{ex.message}"
+        end
+      
+        elapsed = Time.instant - started_at
+        report_deb_cache_verification_progress(progress, "#{label} done (#{elapsed.total_seconds.round(1)}s)")
+        report_deb_cache_verification_progress(progress, details) unless details.empty?
+      end
+      
+      private def run_deb_cache_verification_command(
+        command : String,
+        timeout : Time::Span = 30.seconds
+      ) : String
+        result = @interaction.execute(command, timeout)
+        unless result.success?
+          raise "Guest command failed (exit=#{result.exit_code}):\n#{result.stderr}\n#{result.stdout}"
+        end
+      
+        [result.stdout.strip, result.stderr.strip].reject(&.empty?).join("\n")
+      end
+      
+      private def report_deb_cache_verification_progress(
+        progress : Proc(String, Nil)?,
+        message : String
+      ) : Nil
+        if callback = progress
+          callback.call(message)
+        else
+          Log.info { message }
+        end
+      end
+    end
+  
     module VerifySharedDirectory
       def verify_shared_directory : Nil
         token = Random.rand(1_i64..Int64::MAX).to_s
@@ -563,6 +1093,8 @@ module GRML
     include Boot
     include VerifySharedDirectory
     include PrepareAlpineBundle
+    include PrepareDebCache
+    include VerifyDebCache
     include Storage
     include Terminate
   end
@@ -820,6 +1352,17 @@ module GRML
       end
     end
   
+    module PrepareDebCache
+      DEFAULT_DEB_CACHE_DIRECTORY = "/mnt/shared/deb-cache"
+      
+      def prepare_deb_cache(agent : T, arguments : Array(String), progress : Proc(String, Nil)? = nil) : String forall T
+        raise ArgumentError.new("Usage: prepare_deb_cache") unless arguments.empty?
+      
+        agent.prepare_deb_cache(progress)
+        "Prepared shared Debian package cache at #{DEFAULT_DEB_CACHE_DIRECTORY}."
+      end
+    end
+  
     module Questions
       def focus? : Bool
         value = ENV.fetch(GRML::REPL::FOCUS_ENV, "true").strip.downcase
@@ -869,10 +1412,30 @@ module GRML
       end
     end
   
+    module VerifyDebCache
+      DEFAULT_DEB_CACHE_VERIFICATION_PACKAGE = "hello"
+      
+      def verify_deb_cache(agent : T, arguments : Array(String), progress : Proc(String, Nil)? = nil) : String forall T
+        if arguments.size > 1
+          raise ArgumentError.new("Usage: verify_deb_cache [package]")
+        end
+      
+        package = arguments.first? || DEFAULT_DEB_CACHE_VERIFICATION_PACKAGE
+        unless package.matches?(/\A[a-z0-9][a-z0-9+.-]*\z/)
+          raise ArgumentError.new("Invalid Debian package name: #{package.inspect}")
+        end
+      
+        agent.verify_deb_cache(package, progress)
+        "Verified shared Debian package cache using #{package}."
+      end
+    end
+  
     FOCUS_ENV = "GRML_AGENT_REPL_FOCUS"
     
     extend Questions
     extend PrepareAlpineBundle
+    extend PrepareDebCache
+    extend VerifyDebCache
     extend BuildDefinition
     extend Run
   
@@ -986,6 +1549,30 @@ module GRML
           nil
         end
       end
+    
+      module PrepareDebCache
+        NAME = "prepare_deb_cache"
+        
+        def self.register(repl : TmuxREPL::Definition, agent : T) : Nil forall T
+          repl.on_command(NAME) do |context, arguments|
+            progress = ->(message : String) { context.puts(message) }
+            GRML::REPL.prepare_deb_cache(agent, arguments, progress)
+          end
+          nil
+        end
+      end
+    
+      module VerifyDebCache
+        NAME = "verify_deb_cache"
+        
+        def self.register(repl : TmuxREPL::Definition, agent : T) : Nil forall T
+          repl.on_command(NAME) do |context, arguments|
+            progress = ->(message : String) { context.puts(message) }
+            GRML::REPL.verify_deb_cache(agent, arguments, progress)
+          end
+          nil
+        end
+      end
     end
   
     class Definition
@@ -994,6 +1581,8 @@ module GRML
           GRML::REPL::Commands::OCR.register(repl, agent)
           GRML::REPL::Commands::GuestExec.register(repl, agent)
           GRML::REPL::Commands::PrepareAlpineBundle.register(repl, agent)
+          GRML::REPL::Commands::PrepareDebCache.register(repl, agent)
+          GRML::REPL::Commands::VerifyDebCache.register(repl, agent)
           GRML::REPL::Commands::CreateDisk.register(repl, agent)
           GRML::REPL::Commands::AttachDisk.register(repl, agent)
           GRML::REPL::Commands::CreateExt4Disk.register(repl, agent)
