@@ -31,8 +31,10 @@ The command configures:
   bootstrap and the later chroot package installation.
 
 The service drop-in is needed because Debian's apt-cacher-ng service
-restricts its writable paths. The cache remains in the shared directory
-when the GRML VM is shut down.
+restricts its writable paths. It deliberately does not set
+`WorkingDirectory` to the 9p mount: doing so makes systemd add mount-unit
+dependencies for that path, while GRML mounts the shared directory directly.
+The cache remains in the shared directory when the GRML VM is shut down.
 
 ## Package version behavior
 
