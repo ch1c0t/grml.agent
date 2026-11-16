@@ -96,6 +96,7 @@ describe GRML::Agent::PrepareAlpineBundle do
     commands[checksum_audit].should contain("cut -c67- SHA256SUMS")
 
     progress.any? { |message| message.includes?("[14/14] Publishing the LATEST bundle pointer done") }.should be_true
+    progress.any? { |message| message.includes?("APK files: 27") }.should be_true
   end
 
   it "does not build the local index or publish when package signature verification fails" do
