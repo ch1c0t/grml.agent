@@ -37,6 +37,7 @@ end
 class FakeGRMLAgent
   getter interaction : FakeGRMLInteraction
   getter prepared_branches = [] of String
+  getter deb_cache_preparations = 0
   getter created_disks = [] of Tuple(String, String, String)
   getter attached_disks = [] of Tuple(String, String)
   getter ext4_disks = [] of Tuple(String, String, String?, String)
@@ -51,6 +52,11 @@ class FakeGRMLAgent
   ) : Nil
     @prepared_branches << branch
     progress.try &.call("fake preparation progress")
+  end
+
+  def prepare_deb_cache(progress : Proc(String, Nil)? = nil) : Nil
+    @deb_cache_preparations += 1
+    progress.try &.call("fake Debian cache preparation progress")
   end
 
   def create_disk(name : String, size : String, format : String = "qcow2") : String
@@ -127,7 +133,31 @@ describe GRML::REPL do
       "guest_exec",
       "ocr",
       "prepare_alpine_bundle",
+      "prepare_deb_cache",
     ])
+  end
+
+
+  it "registers the shared Debian package cache command" do
+    definition = GRML::REPL.build_definition(FakeGRMLAgent.new)
+    definition.command_names.should contain("prepare_deb_cache")
+  end
+
+  it "prepares the shared Debian package cache without accepting arguments" do
+    agent = FakeGRMLAgent.new
+    messages = [] of String
+    progress = ->(message : String) { messages << message; nil }
+
+    result = GRML::REPL.prepare_deb_cache(agent, [] of String, progress)
+
+    result.should contain("/mnt/shared/deb-cache")
+    agent.deb_cache_preparations.should eq(1)
+    messages.should eq(["fake Debian cache preparation progress"])
+
+    expect_raises(ArgumentError, "Usage: prepare_deb_cache") do
+      GRML::REPL.prepare_deb_cache(agent, ["unexpected"])
+    end
+    agent.deb_cache_preparations.should eq(1)
   end
 
   it "defaults bundle preparation to latest-stable" do
