@@ -219,7 +219,7 @@ private def run_deb_cache_command(
     raise "Guest command failed (exit=#{result.exit_code}):\n#{result.stderr}\n#{result.stdout}"
   end
 
-  [result.stdout.strip, result.stderr.strip].reject(&.empty?).join("\n")
+  ""
 end
 
 private def report_deb_cache_output(progress : Proc(String, Nil)?, chunk : String) : Nil
@@ -234,7 +234,7 @@ end
 
 private def report_deb_cache_progress(progress : Proc(String, Nil)?, message : String) : Nil
   if callback = progress
-    callback.call(message)
+    callback.call("#{message}\n")
   else
     Log.info { message }
   end
