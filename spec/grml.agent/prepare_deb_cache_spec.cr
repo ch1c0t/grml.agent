@@ -12,6 +12,7 @@ end
 class GRMLDebCacheFakeInteraction
   getter commands = [] of String
   getter timeouts = [] of Time::Span
+  getter streamed_commands = [] of String
   property exit_code = 0
   property failure_at : Int32?
   property failure_exit_code = 1
@@ -23,6 +24,18 @@ class GRMLDebCacheFakeInteraction
     @timeouts << timeout
     code = @failure_at == @commands.size ? @failure_exit_code : @exit_code
     QEMU::CommandResult.new(code, @stdout, @stderr)
+  end
+
+  def execute_streaming(
+    command : String,
+    timeout : Time::Span = 30.seconds,
+    &on_output : Symbol, String ->
+  ) : QEMU::CommandResult
+    @streamed_commands << command
+    result = execute(command, timeout)
+    yield :stdout, result.stdout unless result.stdout.empty?
+    yield :stderr, result.stderr unless result.stderr.empty?
+    result
   end
 end
 
@@ -46,6 +59,7 @@ describe GRML::Agent::PrepareDebCache do
     agent.prepare_deb_cache(->(message : String) { progress << message; nil })
 
     interaction.commands.size.should eq(7)
+    interaction.streamed_commands.should contain(interaction.commands[1])
     interaction.commands[0].should contain("mountpoint -q /mnt/shared")
     interaction.commands[0].should contain("mktemp /mnt/shared/")
     interaction.commands[1].should contain("dpkg-query -W -f='${Status}")
@@ -138,14 +152,18 @@ describe GRML::Agent::VerifyDebCache do
     interaction.commands.size.should eq(6)
     interaction.commands[0].should contain("Acquire::http::Proxy")
     interaction.commands[0].should contain("rm -f '/etc/apt-cacher-ng/zzzzzz-grml-agent-verify.conf'")
+    interaction.streamed_commands.should contain(interaction.commands[1])
     interaction.commands[1].should contain("apt-get update")
     interaction.commands[1].should contain("apt-cache policy")
+    interaction.commands[1].should contain("tee \"$download_log\"")
     interaction.commands[1].should contain("apt-get download")
     interaction.commands[1].should contain("sha256sum")
     interaction.commands[2].should contain("printf '%s\\n' 'Offlinemode: 1'")
     interaction.commands[2].should_not contain("<<'EOF'")
     interaction.commands[2].should contain("systemctl restart apt-cacher-ng")
+    interaction.streamed_commands.should contain(interaction.commands[3])
     interaction.commands[3].should contain("apt-get download")
+    interaction.commands[3].should contain("tee \"$download_log\"")
     interaction.commands[3].should contain("sha256sum")
     interaction.commands[4].should contain("rm -f '/etc/apt-cacher-ng/zzzzzz-grml-agent-verify.conf'")
     interaction.commands[5].should contain("rm -rf '/tmp/grml-agent-deb-cache-verify-")
