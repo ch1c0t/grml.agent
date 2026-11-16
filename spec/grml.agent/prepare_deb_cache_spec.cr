@@ -48,6 +48,7 @@ describe GRML::Agent::PrepareDebCache do
     interaction.commands.size.should eq(7)
     interaction.commands[0].should contain("mountpoint -q /mnt/shared")
     interaction.commands[0].should contain("mktemp /mnt/shared/")
+    interaction.commands[1].should contain("dpkg-query -W -f='${Status}")
     interaction.commands[1].should contain("apt-cacher-ng")
     interaction.commands[1].should contain("Acquire::http::Proxy=DIRECT")
     interaction.commands[2].should contain("CacheDir: /mnt/shared/deb-cache/proxy")
