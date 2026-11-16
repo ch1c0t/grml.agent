@@ -281,7 +281,7 @@ private def run_deb_cache_verification_command(
     raise "Guest command failed (exit=#{result.exit_code}):\n#{result.stderr}\n#{result.stdout}"
   end
 
-  [result.stdout.strip, result.stderr.strip].reject(&.empty?).join("\n")
+  ""
 end
 
 private def report_deb_cache_verification_output(progress : Proc(String, Nil)?, chunk : String) : Nil
@@ -299,7 +299,7 @@ private def report_deb_cache_verification_progress(
   message : String
 ) : Nil
   if callback = progress
-    callback.call(message)
+    callback.call("#{message}\n")
   else
     Log.info { message }
   end
