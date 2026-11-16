@@ -33,6 +33,10 @@ Tmux REPL attached to the same running VM. The host REPL provides:
   guest mount point is /mnt/<name>.
 - prepare_alpine_bundle [alpine_branch] — create and verify an offline
   Alpine APK repository bundle.
+- prepare_deb_cache — configure apt-cacher-ng to cache Debian package
+  downloads under /mnt/shared/deb-cache.
+- verify_deb_cache [package] — disable upstream access temporarily and verify
+  that the same Debian package version can be fetched from the shared cache.
 
 Example host REPL commands:
 
@@ -40,6 +44,8 @@ Example host REPL commands:
     attach_disk ./disks/existing.qcow2
     create_ext4_disk workspace 8G
     create_ext4_disk data 20G /mnt/data raw
+    prepare_deb_cache
+    verify_deb_cache hello
     guest_exec 'lsblk -f; blkid -p /dev/vda1; file -s /dev/vda1'
     ocr
 
@@ -63,6 +69,24 @@ to choose a different discovery directory.
 The offline-bundle workflow stores immutable runs beneath
 /mnt/shared/alpine-bundles/runs/. See
 docs/alpine-offline-bundle.md for details.
+
+The Debian package cache uses apt-cacher-ng at 127.0.0.1:3142 and stores
+the proxy's cached repository data under /mnt/shared/deb-cache/proxy.
+The setup installs apt-cacher-ng when it is missing, so that first
+installation requires network access unless apt-cacher-ng is already in
+the GRML image. Add apt-cacher-ng to the custom image's package selection
+to have the service available on later boots. Run prepare_deb_cache again
+to start the service and check its configuration after each boot. Run
+verify_deb_cache [package] to demonstrate that the same package archive can
+be fetched while upstream access is disabled; the default package is hello.
+The setup configures APT's HTTP proxy and exports APT_PROXY for grml-live;
+source /etc/profile.d/90-grml-agent-deb-cache.sh in an already-open shell.
+
+APT still refreshes repository metadata to learn which package version is
+current. When the requested .deb for that version is already cached,
+apt-cacher-ng serves it locally. A newer package version has a different
+repository path and is downloaded once; the cache does not force an older
+version onto the build. See docs/deb-package-cache.md for details.
 
 Set GRML_AGENT_REPL_FOCUS=false to keep the host tmux client in its current
 session and switch manually with: tmux switch-client -t grml. Use
