@@ -74,11 +74,10 @@ def verify_deb_cache(package : String = "hello", progress : Proc(String, Nil)? =
         fi
 
         download_log="$work_directory/online/download.log"
-        if ! (cd "$work_directory/online" && apt-get download "$package=$version") >"$download_log" 2>&1; then
-          cat "$download_log" >&2
+        if ! (cd "$work_directory/online" && apt-get download "$package=$version") 2>&1 | tee "$download_log"; then
+          echo "APT could not download $package=$version" >&2
           exit 41
         fi
-        cat "$download_log"
 
         if ! grep -Eq 'Get:[[:space:]]*[0-9]+[[:space:]]+http://' "$download_log"; then
           echo "The package was not fetched from an HTTP repository; this HTTP cache cannot verify HTTPS package payloads" >&2
@@ -97,7 +96,7 @@ def verify_deb_cache(package : String = "hello", progress : Proc(String, Nil)? =
         printf 'Package: %s\nVersion: %s\nFirst download SHA-256: %s\nArchive size: %s bytes\n' \
           "$package" "$version" "$checksum" "$bytes"
       BASH
-      run_deb_cache_verification_command(command, 10.minutes)
+      run_deb_cache_verification_command(command, 10.minutes, progress)
     end
 
     offline_mode_may_be_enabled = true
@@ -143,12 +142,10 @@ def verify_deb_cache(package : String = "hello", progress : Proc(String, Nil)? =
           exit 45
         fi
 
-        if ! (cd "$work_directory/offline" && apt-get download "$package=$version") >"$download_log" 2>&1; then
-          cat "$download_log" >&2
+        if ! (cd "$work_directory/offline" && apt-get download "$package=$version") 2>&1 | tee "$download_log"; then
           echo "The package was not available from the cache while upstream access was disabled" >&2
           exit 46
         fi
-        cat "$download_log"
 
         if ! grep -Eq 'Get:[[:space:]]*[0-9]+[[:space:]]+http://' "$download_log"; then
           echo "The offline package request did not use an HTTP repository URL" >&2
@@ -172,7 +169,7 @@ def verify_deb_cache(package : String = "hello", progress : Proc(String, Nil)? =
         printf 'Offline download SHA-256: %s\nCache verification: PASS (upstream disabled)\n' \
           "$actual_checksum"
       BASH
-      run_deb_cache_verification_command(command, 5.minutes)
+      run_deb_cache_verification_command(command, 5.minutes, progress)
     end
 
     report_deb_cache_verification_stage(5, "Restoring normal proxy mode", progress) do
@@ -274,14 +271,27 @@ end
 
 private def run_deb_cache_verification_command(
   command : String,
-  timeout : Time::Span = 30.seconds
+  timeout : Time::Span = 30.seconds,
+  progress : Proc(String, Nil)? = nil
 ) : String
-  result = @interaction.execute(command, timeout)
+  result = @interaction.execute_streaming(command, timeout) do |_stream, chunk|
+    report_deb_cache_verification_output(progress, chunk)
+  end
   unless result.success?
     raise "Guest command failed (exit=#{result.exit_code}):\n#{result.stderr}\n#{result.stdout}"
   end
 
   [result.stdout.strip, result.stderr.strip].reject(&.empty?).join("\n")
+end
+
+private def report_deb_cache_verification_output(progress : Proc(String, Nil)?, chunk : String) : Nil
+  return if chunk.empty?
+
+  if callback = progress
+    callback.call(chunk)
+  else
+    Log.info { chunk }
+  end
 end
 
 private def report_deb_cache_verification_progress(
