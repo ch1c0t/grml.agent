@@ -75,7 +75,7 @@ describe GRML::Agent::PrepareDebCache do
       agent.prepare_deb_cache(->(message : String) { progress << message; nil })
     end
 
-    error.message.should contain("apt-cacher-ng did not become ready")
+    error.message.to_s.should contain("apt-cacher-ng did not become ready")
     progress.last.should eq("Shared Debian package cache setup failed")
   end
 end
