@@ -189,7 +189,7 @@ def verify_deb_cache(package : String = "hello", progress : Proc(String, Nil)? =
     report_deb_cache_verification_progress(progress, "Total verification time: #{elapsed.total_seconds.round(1)}s")
   rescue ex
     report_deb_cache_verification_progress(progress, "Package cache verification FAILED: #{ex.message}")
-    raise
+    raise ex
   ensure
     if offline_mode_may_be_enabled
       begin
