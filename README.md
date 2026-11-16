@@ -21,9 +21,9 @@ Tmux REPL attached to the same running VM. The host REPL provides:
 
 - ocr — recognize text in the latest guest display frame.
 - guest_exec <shell command> — execute a shell command inside GRML through
-  QEMU Guest Agent and return its stdout/stderr to the host REPL. The command
-  runs as root in the guest. Quote a complete command string when it contains
-  spaces or shell operators.
+  QEMU Guest Agent and stream stdout/stderr to the host REPL while it runs.
+  The command runs as root in the guest. Quote a complete command string when
+  it contains spaces or shell operators.
 - create_disk <name> <size> [qcow2|raw] — create an image under ./disks/
   and hot-attach it as a virtio block device.
 - attach_disk <path> [qcow2|raw] — hot-attach an existing image.
@@ -69,6 +69,12 @@ to choose a different discovery directory.
 The offline-bundle workflow stores immutable runs beneath
 /mnt/shared/alpine-bundles/runs/. See
 docs/alpine-offline-bundle.md for details.
+
+Long-running guest commands stream their output to the host REPL instead
+of waiting for process exit. This includes `guest_exec`, Debian cache setup
+and verification, and Alpine offline bundle downloads and verification.
+Progress-stage messages are kept separate from the command's stdout/stderr.
+Short guest commands continue to use the synchronous QEMU API.
 
 The Debian package cache uses apt-cacher-ng at 127.0.0.1:3142 and stores
 the proxy's cached repository data under /mnt/shared/deb-cache/proxy.
