@@ -67,8 +67,11 @@ environment variables; run:
 Run `prepare_deb_cache` after each GRML boot. It checks that the shared
 directory is mounted, reloads systemd, starts the proxy with the shared
 cache directory, and verifies that the proxy responds before reporting
-success. The systemd condition also prevents the service from starting
-against a missing shared mount.
+success. Before restarting the service it removes the temporary offline-mode
+override used by `verify_deb_cache`. This recovers normal upstream access
+after a forced VM shutdown or interruption during verification. The systemd
+condition also prevents the service from starting against a missing shared
+mount.
 
 For GRML ISO builds, make sure the shell which launches `grml-live` has
 `APT_PROXY` in its environment. The APT configuration file also configures
