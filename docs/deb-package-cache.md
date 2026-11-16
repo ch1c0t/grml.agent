@@ -21,12 +21,15 @@ The command configures:
 
 - apt-cacher-ng's `CacheDir` as `/mnt/shared/deb-cache/proxy`;
 - the daemon to listen only on `127.0.0.1:3142`;
+- a systemd service drop-in that allows writes to the shared cache and
+  prevents the daemon from starting before `/mnt/shared` is mounted;
 - APT's HTTP proxy as `http://127.0.0.1:3142`;
 - the `APT_PROXY` environment variable used by grml-live's mmdebstrap
   bootstrap and the later chroot package installation.
 
-It also verifies that the daemon responds before reporting success. The
-cache remains in the shared directory when the GRML VM is shut down.
+The service drop-in is needed because Debian's apt-cacher-ng service
+restricts its writable paths. The cache remains in the shared directory
+when the GRML VM is shut down.
 
 ## Package version behavior
 
@@ -40,18 +43,30 @@ This reuses package archives without pinning the build to stale package
 versions. It does not make repository metadata immutable: a build still
 needs updated repository indexes to discover current versions.
 
+The proxy caches HTTP repository traffic. HTTPS repository traffic is not
+cached by this HTTP proxy. GRML's standard Debian repository configuration
+uses HTTP URLs; custom HTTPS repositories should be changed to HTTP where
+appropriate or mirrored separately.
+
 The proxy cache may contain multiple versions over time. Its data is kept
 separate from other shared artifacts in `/mnt/shared/deb-cache/proxy`.
 
-## Current shell
+## Current shell and subsequent boots
 
-The command persists `APT_PROXY` for future login shells and writes APT's
-proxy configuration. An already-open shell does not automatically inherit
-new environment variables; run:
+The command writes APT's proxy configuration and exports `APT_PROXY` in
+new login shells. An already-open shell does not automatically inherit new
+environment variables; run:
 
 ```sh
 . /etc/profile.d/90-grml-agent-deb-cache.sh
 ```
 
-The cache setup is idempotent. Run `prepare_deb_cache` again after a GRML
-boot to restart the proxy and verify that the shared cache is usable.
+Run `prepare_deb_cache` after each GRML boot. It checks that the shared
+directory is mounted, reloads systemd, starts the proxy with the shared
+cache directory, and verifies that the proxy responds before reporting
+success. The systemd condition also prevents the service from starting
+against a missing shared mount.
+
+For GRML ISO builds, make sure the shell which launches `grml-live` has
+`APT_PROXY` in its environment. The APT configuration file also configures
+ordinary APT commands to use the proxy automatically.
