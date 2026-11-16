@@ -20,7 +20,10 @@ so the daemon is present after each boot.
 The command configures:
 
 - apt-cacher-ng's `CacheDir` as `/mnt/shared/deb-cache/proxy`;
-- the daemon to listen only on `127.0.0.1:3142`;
+- the daemon to listen only on `127.0.0.1:3142` and expose its local
+  status page;
+- a write-permission check using the daemon's `apt-cacher-ng` service user
+  before the service is restarted;
 - a systemd service drop-in that allows writes to the shared cache and
   prevents the daemon from starting before `/mnt/shared` is mounted;
 - APT's HTTP proxy as `http://127.0.0.1:3142`;
