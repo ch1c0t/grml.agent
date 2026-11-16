@@ -76,9 +76,11 @@ The setup installs apt-cacher-ng when it is missing, so that first
 installation requires network access unless apt-cacher-ng is already in
 the GRML image. Add apt-cacher-ng to the custom image's package selection
 to have the service available on later boots. Run prepare_deb_cache again
-to start the service and verify the cache after each boot. The command
-configures APT's HTTP proxy and exports APT_PROXY for grml-live; source
-/etc/profile.d/90-grml-agent-deb-cache.sh in an already-open shell.
+to start the service and check its configuration after each boot. Run
+verify_deb_cache [package] to demonstrate that the same package archive can
+be fetched while upstream access is disabled; the default package is hello.
+The setup configures APT's HTTP proxy and exports APT_PROXY for grml-live;
+source /etc/profile.d/90-grml-agent-deb-cache.sh in an already-open shell.
 
 APT still refreshes repository metadata to learn which package version is
 current. When the requested .deb for that version is already cached,
