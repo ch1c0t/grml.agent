@@ -32,7 +32,7 @@ def prepare_deb_cache(progress : Proc(String, Nil)? = nil) : Nil
         echo "apt-cacher-ng installation completed"
       fi
     BASH
-    run_deb_cache_command(command, 5.minutes)
+    run_deb_cache_command(command, 5.minutes, progress)
   end
 
   report_deb_cache_stage(3, "Preparing persistent cache storage", progress) do
@@ -209,19 +209,32 @@ end
 
 private def run_deb_cache_command(
   command : String,
-  timeout : Time::Span = 30.seconds
+  timeout : Time::Span = 30.seconds,
+  progress : Proc(String, Nil)? = nil
 ) : String
-  result = @interaction.execute(command, timeout)
+  result = @interaction.execute_streaming(command, timeout) do |_stream, chunk|
+    report_deb_cache_output(progress, chunk)
+  end
   unless result.success?
     raise "Guest command failed (exit=#{result.exit_code}):\n#{result.stderr}\n#{result.stdout}"
   end
 
-  [result.stdout.strip, result.stderr.strip].reject(&.empty?).join("\n")
+  ""
+end
+
+private def report_deb_cache_output(progress : Proc(String, Nil)?, chunk : String) : Nil
+  return if chunk.empty?
+
+  if callback = progress
+    callback.call(chunk)
+  else
+    Log.info { chunk }
+  end
 end
 
 private def report_deb_cache_progress(progress : Proc(String, Nil)?, message : String) : Nil
   if callback = progress
-    callback.call(message)
+    callback.call("#{message}\n")
   else
     Log.info { message }
   end

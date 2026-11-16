@@ -10,6 +10,7 @@ end
 
 class GRMLBundlePreparationFakeInteraction
   getter commands = [] of String
+  getter streamed_commands = [] of String
   property failure_pattern : String?
 
   def initialize(@failure_pattern : String? = nil)
@@ -37,6 +38,18 @@ class GRMLBundlePreparationFakeInteraction
 
     QEMU::CommandResult.new(0, output, "")
   end
+
+  def execute_streaming(
+    command : String,
+    timeout : Time::Span = 30.seconds,
+    &on_output : Symbol, String ->
+  ) : QEMU::CommandResult
+    @streamed_commands << command
+    result = execute(command, timeout)
+    yield :stdout, result.stdout unless result.stdout.empty?
+    yield :stderr, result.stderr unless result.stderr.empty?
+    result
+  end
 end
 
 class GRMLBundlePreparationHarness
@@ -59,6 +72,7 @@ describe GRML::Agent::PrepareAlpineBundle do
     agent.prepare_alpine_bundle("latest-stable", ->(message : String) { progress << message; nil })
 
     commands = interaction.commands
+    interaction.streamed_commands.should eq(commands.reject { |command| command == "uname -m" })
     verify_packages = commands.index { |command| command.includes?(" verify ./*.apk") }.not_nil!
     build_index = commands.index { |command| command.includes?("index --rewrite-arch x86_64") }.not_nil!
     offline_install = commands.index { |command| command.includes?("add --initdb alpine-base alpine-keys") }.not_nil!
@@ -82,6 +96,7 @@ describe GRML::Agent::PrepareAlpineBundle do
     commands[checksum_audit].should contain("cut -c67- SHA256SUMS")
 
     progress.any? { |message| message.includes?("[14/14] Publishing the LATEST bundle pointer done") }.should be_true
+    progress.any? { |message| message.includes?("APK files: 27") }.should be_true
   end
 
   it "does not build the local index or publish when package signature verification fails" do

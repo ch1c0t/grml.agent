@@ -10,7 +10,7 @@ crystal: ">= 1.22.0"
 dependencies:
   qemu:
     github: ch1c0t/crystal.qemu
-    branch: main
+    branch: guest-agent-live-output
   tmux_repl:
     github: ch1c0t/tmux-repl
     branch: main
