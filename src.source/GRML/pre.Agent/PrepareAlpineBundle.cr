@@ -135,7 +135,7 @@ end
 
 private def report_bundle_progress(progress : Proc(String, Nil)?, message : String) : Nil
   if callback = progress
-    callback.call("#{message}\\n")
+    callback.call("#{message}\n")
   else
     Log.info { message }
   end
