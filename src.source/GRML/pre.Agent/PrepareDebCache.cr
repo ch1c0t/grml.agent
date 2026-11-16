@@ -33,6 +33,7 @@ def prepare_deb_cache(progress : Proc(String, Nil)? = nil) : Nil
     cat > /etc/apt-cacher-ng/zzzz-grml-agent.conf <<'EOF'
     CacheDir: /mnt/shared/deb-cache/proxy
     BindAddress: 127.0.0.1
+    ReportPage: acng-report.html
     EOF
 
     # The Debian service restricts its writable paths. Allow the shared cache
@@ -46,6 +47,11 @@ def prepare_deb_cache(progress : Proc(String, Nil)? = nil) : Nil
     WorkingDirectory=/mnt/shared/deb-cache/proxy
     ReadWritePaths=/mnt/shared/deb-cache/proxy
     EOF
+
+    if ! runuser -u apt-cacher-ng -- test -w "$cache_path"; then
+      echo "apt-cacher-ng cannot write to shared cache directory: $cache_path" >&2
+      exit 22
+    fi
 
     cat > /etc/apt/apt.conf.d/90-grml-agent-deb-cache <<'EOF'
     Acquire::http::Proxy "http://127.0.0.1:3142";
