@@ -73,3 +73,38 @@ against a missing shared mount.
 For GRML ISO builds, make sure the shell which launches `grml-live` has
 `APT_PROXY` in its environment. The APT configuration file also configures
 ordinary APT commands to use the proxy automatically.
+
+## Verify actual package reuse
+
+prepare_deb_cache verifies the mount, daemon configuration, service-user write
+access, and proxy readiness. It does not download a package, so its success
+message must not be interpreted as proof that an archive has been cached.
+
+Run:
+
+    verify_deb_cache
+
+The command uses the Debian package hello by default. You can select another
+package with verify_deb_cache bash. The package name must be a simple Debian
+binary package name.
+
+The verification performs an integration test through APT:
+
+1. Refresh package indexes and resolve the current candidate version.
+2. Download that exact .deb through the configured APT HTTP proxy into a
+   fresh temporary directory and record its SHA-256 checksum.
+3. Temporarily configure apt-cacher-ng with Offlinemode: 1. In this mode the
+   proxy refuses upstream downloads and can only serve content already in
+   its cache.
+4. Download the same package version again into a different temporary
+   directory. The command compares its SHA-256 checksum with the first
+   download.
+5. Remove the temporary offline-mode configuration and restart apt-cacher-ng
+   in normal online mode, including when a verification stage fails.
+
+A successful result therefore demonstrates that the same package archive was
+served while upstream access was disabled. The first download requires network
+access unless the archive is already cached. The selected package must come
+from an HTTP repository; this proxy does not cache HTTPS package payloads.
+Temporary download files are removed after the test. The first successful
+download remains in the persistent shared cache.

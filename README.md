@@ -35,6 +35,8 @@ Tmux REPL attached to the same running VM. The host REPL provides:
   Alpine APK repository bundle.
 - prepare_deb_cache — configure apt-cacher-ng to cache Debian package
   downloads under /mnt/shared/deb-cache.
+- verify_deb_cache [package] — disable upstream access temporarily and verify
+  that the same Debian package version can be fetched from the shared cache.
 
 Example host REPL commands:
 
@@ -43,6 +45,7 @@ Example host REPL commands:
     create_ext4_disk workspace 8G
     create_ext4_disk data 20G /mnt/data raw
     prepare_deb_cache
+    verify_deb_cache hello
     guest_exec 'lsblk -f; blkid -p /dev/vda1; file -s /dev/vda1'
     ocr
 

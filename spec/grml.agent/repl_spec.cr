@@ -38,6 +38,7 @@ class FakeGRMLAgent
   getter interaction : FakeGRMLInteraction
   getter prepared_branches = [] of String
   getter deb_cache_preparations = 0
+  getter deb_cache_verifications = [] of String
   getter created_disks = [] of Tuple(String, String, String)
   getter attached_disks = [] of Tuple(String, String)
   getter ext4_disks = [] of Tuple(String, String, String?, String)
@@ -57,6 +58,11 @@ class FakeGRMLAgent
   def prepare_deb_cache(progress : Proc(String, Nil)? = nil) : Nil
     @deb_cache_preparations += 1
     progress.try &.call("fake Debian cache preparation progress")
+  end
+
+  def verify_deb_cache(package : String = "hello", progress : Proc(String, Nil)? = nil) : Nil
+    @deb_cache_verifications << package
+    progress.try &.call("fake Debian cache verification progress")
   end
 
   def create_disk(name : String, size : String, format : String = "qcow2") : String
@@ -134,6 +140,7 @@ describe GRML::REPL do
       "ocr",
       "prepare_alpine_bundle",
       "prepare_deb_cache",
+      "verify_deb_cache",
     ])
   end
 
@@ -153,6 +160,41 @@ describe GRML::REPL do
       GRML::REPL.prepare_deb_cache(agent, ["unexpected"])
     end
     agent.deb_cache_preparations.should eq(1)
+  end
+
+  it "verifies the shared Debian cache using hello by default" do
+    agent = FakeGRMLAgent.new
+    messages = [] of String
+    progress = ->(message : String) { messages << message; nil }
+
+    result = GRML::REPL.verify_deb_cache(agent, [] of String, progress)
+
+    result.should contain("hello")
+    agent.deb_cache_verifications.should eq(["hello"])
+    messages.should eq(["fake Debian cache verification progress"])
+  end
+
+  it "accepts one safe package name for cache verification" do
+    agent = FakeGRMLAgent.new
+
+    result = GRML::REPL.verify_deb_cache(agent, ["bash"])
+
+    result.should contain("bash")
+    agent.deb_cache_verifications.should eq(["bash"])
+  end
+
+  it "rejects multiple or unsafe cache verification arguments" do
+    agent = FakeGRMLAgent.new
+
+    expect_raises(ArgumentError, "Usage: verify_deb_cache [package]") do
+      GRML::REPL.verify_deb_cache(agent, ["hello", "bash"])
+    end
+
+    expect_raises(ArgumentError, "Invalid Debian package name") do
+      GRML::REPL.verify_deb_cache(agent, ["hello;touch"])
+    end
+
+    agent.deb_cache_verifications.should be_empty
   end
 
   it "defaults bundle preparation to latest-stable" do
