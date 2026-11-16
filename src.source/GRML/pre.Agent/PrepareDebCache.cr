@@ -60,7 +60,6 @@ def prepare_deb_cache(progress : Proc(String, Nil)? = nil) : Nil
       ConditionPathIsMountPoint=/mnt/shared
 
       [Service]
-      WorkingDirectory=/mnt/shared/deb-cache/proxy
       ReadWritePaths=/mnt/shared/deb-cache/proxy
       EOF
 
@@ -108,8 +107,32 @@ def prepare_deb_cache(progress : Proc(String, Nil)? = nil) : Nil
       # when preparing the cache after a boot.
       rm -f '/etc/apt-cacher-ng/zzzzzz-grml-agent-verify.conf'
       systemctl daemon-reload
-      systemctl restart apt-cacher-ng
-      systemctl is-active apt-cacher-ng
+
+      diagnose_start_failure() {
+        systemctl --no-pager --full status apt-cacher-ng.service >&2 || true
+        journalctl -u apt-cacher-ng.service -b -n 80 --no-pager >&2 || true
+
+        for log_file in /var/log/apt-cacher-ng/*.err; do
+          if [ -f "$log_file" ]; then
+            echo "----- $log_file -----" >&2
+            tail -n 80 "$log_file" >&2 || true
+          fi
+        done
+      }
+
+      if ! systemctl restart apt-cacher-ng.service; then
+        diagnose_start_failure
+        echo "apt-cacher-ng could not be restarted" >&2
+        exit 24
+      fi
+
+      if ! systemctl is-active --quiet apt-cacher-ng.service; then
+        diagnose_start_failure
+        echo "apt-cacher-ng did not remain active after restart" >&2
+        exit 25
+      fi
+
+      systemctl is-active apt-cacher-ng.service
     BASH
     run_deb_cache_command(command, 45.seconds)
   end
