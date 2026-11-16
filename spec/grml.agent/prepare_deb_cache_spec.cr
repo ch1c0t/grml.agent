@@ -57,14 +57,18 @@ describe GRML::Agent::PrepareDebCache do
     interaction.commands[2].should contain("ReportPage: acng-report.html")
     interaction.commands[2].should contain("runuser -u apt-cacher-ng -- test -w")
     interaction.commands[2].should contain("ConditionPathIsMountPoint=/mnt/shared")
-    interaction.commands[2].should contain("WorkingDirectory=/mnt/shared/deb-cache/proxy")
+    interaction.commands[2].should_not contain("WorkingDirectory=/mnt/shared/deb-cache/proxy")
     interaction.commands[2].should contain("ReadWritePaths=/mnt/shared/deb-cache/proxy")
     interaction.commands[3].should contain("Acquire::http::Proxy")
     interaction.commands[3].should contain("export APT_PROXY")
     interaction.commands[3].should contain("/etc/environment")
     interaction.commands[4].should contain("rm -f '/etc/apt-cacher-ng/zzzzzz-grml-agent-verify.conf'")
     interaction.commands[4].should contain("systemctl daemon-reload")
-    interaction.commands[4].should contain("systemctl restart apt-cacher-ng")
+    interaction.commands[4].should contain("systemctl restart apt-cacher-ng.service")
+    interaction.commands[4].should contain("diagnose_start_failure")
+    interaction.commands[4].should contain("systemctl --no-pager --full status")
+    interaction.commands[4].should contain("journalctl -u apt-cacher-ng.service")
+    interaction.commands[4].should contain("tail -n 80")
     interaction.commands[5].should contain("acng-report.html")
     interaction.commands[5].should contain("journalctl -u apt-cacher-ng")
     interaction.commands[6].should contain("find \"$cache_path\" -type f -name '*.deb'")
@@ -81,6 +85,23 @@ describe GRML::Agent::PrepareDebCache do
     progress.any? { |message| message.includes?("[7/7] Reporting cache status done") }.should be_true
     progress.any? { |message| message.includes?("Package reuse is not yet verified") }.should be_true
     progress.last.should contain("Total preparation time:")
+  end
+
+  it "includes service diagnostics when apt-cacher-ng cannot start" do
+    interaction = GRMLDebCacheFakeInteraction.new
+    interaction.failure_at = 5
+    interaction.stderr = "Job for apt-cacher-ng.service failed"
+    agent = GRMLDebCacheHarness.new(interaction)
+    progress = [] of String
+
+    error = expect_raises(Exception, "Failed during Starting apt-cacher-ng") do
+      agent.prepare_deb_cache(->(message : String) { progress << message; nil })
+    end
+
+    error.message.to_s.should contain("Job for apt-cacher-ng.service failed")
+    interaction.commands[4].should contain("journalctl -u apt-cacher-ng.service")
+    progress.last.should contain("[5/7] Starting apt-cacher-ng FAILED")
+    progress.any? { |message| message == "Shared Debian package cache is ready" }.should be_false
   end
 
   it "reports the failing setup stage without claiming the cache is ready" do
