@@ -44,7 +44,7 @@ describe GRML::Agent::PrepareDebCache do
     interaction.commands.size.should eq(1)
     command = interaction.commands.first
     command.should contain("mountpoint -q /mnt/shared")
-    command.should contain("apt-get install -y --no-install-recommends apt-cacher-ng")
+    command.should contain("apt-get -o Acquire::http::Proxy=DIRECT install -y --no-install-recommends apt-cacher-ng")
     command.should contain("Acquire::http::Proxy=DIRECT")
     command.should contain("CacheDir: /mnt/shared/deb-cache/proxy")
     command.should contain("zzzz-grml-agent.conf")
