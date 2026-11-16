@@ -46,22 +46,22 @@ def prepare_deb_cache(progress : Proc(String, Nil)? = nil) : Nil
 
       # Load after Debian's zz_debconf.conf so this CacheDir takes precedence.
       rm -f /etc/apt-cacher-ng/90-grml-agent.conf
-      cat > /etc/apt-cacher-ng/zzzz-grml-agent.conf <<'EOF'
-      CacheDir: /mnt/shared/deb-cache/proxy
-      BindAddress: 127.0.0.1
-      ReportPage: acng-report.html
-      EOF
+      printf '%s\\n' \\
+        'CacheDir: /mnt/shared/deb-cache/proxy' \\
+        'BindAddress: 127.0.0.1' \\
+        'ReportPage: acng-report.html' \\
+        > /etc/apt-cacher-ng/zzzz-grml-agent.conf
 
       # Debian's service restricts writable paths. Permit the persistent
       # shared cache and prevent startup before the 9p mount exists.
       mkdir -p "$(dirname "$service_dropin")"
-      cat > "$service_dropin" <<'EOF'
-      [Unit]
-      ConditionPathIsMountPoint=/mnt/shared
-
-      [Service]
-      ReadWritePaths=/mnt/shared/deb-cache/proxy
-      EOF
+      printf '%s\\n' \\
+        '[Unit]' \\
+        'ConditionPathIsMountPoint=/mnt/shared' \\
+        '' \\
+        '[Service]' \\
+        'ReadWritePaths=/mnt/shared/deb-cache/proxy' \\
+        > "$service_dropin"
 
       if ! runuser -u apt-cacher-ng -- test -w "$cache_path"; then
         echo "apt-cacher-ng cannot write to shared cache directory: $cache_path" >&2
@@ -79,14 +79,12 @@ def prepare_deb_cache(progress : Proc(String, Nil)? = nil) : Nil
       set -eu
       proxy_url='#{DEB_CACHE_PROXY_URL}'
 
-      cat > /etc/apt/apt.conf.d/90-grml-agent-deb-cache <<'EOF'
-      Acquire::http::Proxy "http://127.0.0.1:3142";
-      EOF
+      printf '%s\\n' 'Acquire::http::Proxy "http://127.0.0.1:3142";' \\
+        > /etc/apt/apt.conf.d/90-grml-agent-deb-cache
 
       mkdir -p /etc/profile.d
-      cat > /etc/profile.d/90-grml-agent-deb-cache.sh <<'EOF'
-      export APT_PROXY="http://127.0.0.1:3142"
-      EOF
+      printf '%s\\n' 'export APT_PROXY="http://127.0.0.1:3142"' \\
+        > /etc/profile.d/90-grml-agent-deb-cache.sh
       chmod 0644 /etc/apt/apt.conf.d/90-grml-agent-deb-cache /etc/profile.d/90-grml-agent-deb-cache.sh
 
       if [ -f /etc/environment ]; then
