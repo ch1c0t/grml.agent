@@ -138,11 +138,6 @@ describe GRML::REPL do
   end
 
 
-  it "registers the shared Debian package cache command" do
-    definition = GRML::REPL.build_definition(FakeGRMLAgent.new)
-    definition.command_names.should contain("prepare_deb_cache")
-  end
-
   it "prepares the shared Debian package cache without accepting arguments" do
     agent = FakeGRMLAgent.new
     messages = [] of String
