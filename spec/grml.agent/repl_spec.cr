@@ -32,6 +32,17 @@ class FakeGRMLInteraction
   def execute(command : String, timeout : Time::Span = 30.seconds) : FakeGRMLCommandResult
     FakeGRMLCommandResult.new(0, "guest output\n")
   end
+
+  def execute_streaming(
+    command : String,
+    timeout : Time::Span = 30.seconds,
+    &on_output : Symbol, String ->
+  ) : FakeGRMLCommandResult
+    result = execute(command, timeout)
+    yield :stdout, result.stdout unless result.stdout.empty?
+    yield :stderr, result.stderr unless result.stderr.empty?
+    result
+  end
 end
 
 class FakeGRMLAgent
