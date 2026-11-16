@@ -62,6 +62,7 @@ describe GRML::Agent::PrepareDebCache do
     interaction.commands[3].should contain("Acquire::http::Proxy")
     interaction.commands[3].should contain("export APT_PROXY")
     interaction.commands[3].should contain("/etc/environment")
+    interaction.commands[4].should contain("rm -f '/etc/apt-cacher-ng/zzzzzz-grml-agent-verify.conf'")
     interaction.commands[4].should contain("systemctl daemon-reload")
     interaction.commands[4].should contain("systemctl restart apt-cacher-ng")
     interaction.commands[5].should contain("acng-report.html")
