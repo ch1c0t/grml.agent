@@ -107,6 +107,18 @@ describe GRML::Agent::PrepareDebCache do
     progress.last.should contain("Total preparation time:")
   end
 
+  it "forwards package manager output to the progress callback as it is streamed" do
+    interaction = GRMLDebCacheFakeInteraction.new
+    interaction.stdout = "Unpacking apt-cacher-ng (3.7.5-1.3) ...\\n"
+    agent = GRMLDebCacheHarness.new(interaction)
+    progress = [] of String
+
+    agent.prepare_deb_cache(->(message : String) { progress << message; nil })
+
+    progress.any? { |message| message.includes?("Unpacking apt-cacher-ng") }.should be_true
+    interaction.streamed_commands.should contain(interaction.commands[1])
+  end
+
   it "includes service diagnostics when apt-cacher-ng cannot start" do
     interaction = GRMLDebCacheFakeInteraction.new
     interaction.failure_at = 5
