@@ -103,6 +103,10 @@ def prepare_deb_cache(progress : Proc(String, Nil)? = nil) : Nil
   report_deb_cache_stage(5, "Starting apt-cacher-ng", progress) do
     command = <<-BASH
       set -eu
+      # A forced VM shutdown during verify_deb_cache can leave its temporary
+      # offline-mode override behind. Always restore normal upstream access
+      # when preparing the cache after a boot.
+      rm -f '/etc/apt-cacher-ng/zzzzzz-grml-agent-verify.conf'
       systemctl daemon-reload
       systemctl restart apt-cacher-ng
       systemctl is-active apt-cacher-ng
