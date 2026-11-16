@@ -69,7 +69,7 @@ docs/alpine-offline-bundle.md for details.
 
 The Debian package cache uses apt-cacher-ng at 127.0.0.1:3142 and stores
 the proxy's cached repository data under /mnt/shared/deb-cache/proxy.
-The first setup installs apt-cacher-ng when it is missing, so that first
+The setup installs apt-cacher-ng when it is missing, so that first
 installation requires network access unless apt-cacher-ng is already in
 the GRML image. Add apt-cacher-ng to the custom image's package selection
 to have the service available on later boots. Run prepare_deb_cache again
