@@ -12,7 +12,7 @@ def validate_arguments
       if argument.starts_with?("-") || @boot_profile
         usage_error
       end
-      unless argument.matches?(/\\A[a-zA-Z0-9][a-zA-Z0-9._-]*\\z/)
+      unless argument.matches?(/\A[a-zA-Z0-9][a-zA-Z0-9._-]*\z/)
         usage_error
       end
       @boot_profile = argument
