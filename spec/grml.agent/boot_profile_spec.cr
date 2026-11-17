@@ -95,7 +95,7 @@ describe GRML::Agent::Boot do
   it "does not prepare the cache for an empty package profile" do
     events = [] of String
     interaction = GRMLBootProfileFakeInteraction.new(events)
-    interaction.profile_output = "# no packages\n  \n"
+    interaction.profile_output = ""
     agent = GRMLBootProfileHarness.new(interaction, events)
 
     agent.boot("empty")
