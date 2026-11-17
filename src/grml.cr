@@ -5,7 +5,11 @@ module GRML
 
   class Agent
     module Boot
-      def boot : Nil
+      def boot(profile_name : String? = nil, verify_cache : Bool = false) : Nil
+        if verify_cache && profile_name.nil?
+          raise ArgumentError.new("--verify-deb-cache requires a boot profile")
+        end
+      
         navigate_boot_menu
         wait_for_shell
         verify_guest_agent
@@ -13,6 +17,79 @@ module GRML
         verify_shared_directory
       
         Log.info { "GRML shared directory is operational" }
+        install_profile_packages(profile_name, verify_cache) if profile_name
+      end
+      
+      private def install_profile_packages(profile_name : String, verify_cache : Bool) : Nil
+        unless profile_name.matches?(/\A[a-zA-Z0-9][a-zA-Z0-9._-]*\z/)
+          raise ArgumentError.new("Invalid profile name: #{profile_name.inspect}")
+        end
+      
+        packages_file = "/mnt/shared/profiles/#{profile_name}/packages.txt"
+        Log.info { "Reading package list for boot profile '#{profile_name}'" }
+        command = <<-SHELL
+          set -eu
+          packages_file='#{packages_file}'
+          if [ ! -f "$packages_file" ]; then
+            echo "Boot profile package list not found: $packages_file" >&2
+            exit 2
+          fi
+      
+          awk '
+            {
+              sub(/#.*/, "")
+              gsub(/^[[:space:]]+|[[:space:]]+$/, "")
+              if ($0 == "") next
+              if ($0 !~ /^[a-z0-9][a-z0-9+.-]*$/) {
+                printf "Invalid Debian package name on line %d: %s\\n", NR, $0 > "/dev/stderr"
+                exit 2
+              }
+              print
+            }
+          ' "$packages_file"
+          SHELL
+      
+        profile_result = @interaction.execute(command)
+        unless profile_result.success?
+          raise "Could not read boot profile '#{profile_name}' packages (exit=#{profile_result.exit_code}, stderr=#{profile_result.stderr.inspect})"
+        end
+      
+        packages = profile_result.stdout.lines.map(&.strip).reject(&.empty?)
+        if packages.empty? && !verify_cache
+          Log.info { "Boot profile '#{profile_name}' contains no packages; skipping APT cache preparation" }
+          return
+        end
+      
+        progress = ->(message : String) do
+          STDOUT.print(message)
+          STDOUT.flush
+        end
+      
+        Log.info { "Preparing shared Debian package cache for boot profile '#{profile_name}'" }
+        prepare_deb_cache(progress)
+      
+        unless packages.empty?
+          Log.info { "Installing #{packages.size} package(s) from boot profile '#{profile_name}'" }
+          install_command = <<-SHELL
+            set -eu
+            apt-get update
+            DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends #{packages.join(" ")}
+            SHELL
+      
+          result = @interaction.execute_streaming(install_command, 30.minutes) do |_stream, chunk|
+            STDOUT.print(chunk)
+            STDOUT.flush
+          end
+          unless result.success?
+            raise "Could not install packages for boot profile '#{profile_name}' (exit=#{result.exit_code}, stderr=#{result.stderr.inspect})"
+          end
+          Log.info { "Boot profile '#{profile_name}' packages installed" }
+        end
+      
+        if verify_cache
+          Log.info { "Verifying shared Debian package cache after installing boot profile '#{profile_name}'" }
+          verify_deb_cache("hello", progress)
+        end
       end
       
       private def navigate_boot_menu : Nil
@@ -1298,7 +1375,7 @@ module GRML
       when "prepare_alpine_bundle"
         Act::PrepareAlpineBundle.new(args).run
       else
-        STDERR.puts "Usage: grml.agent boot [--iso PATH] | tmux [--iso PATH] | prepare_alpine_bundle [alpine_branch]"
+        STDERR.puts "Usage: grml.agent boot [PROFILE_NAME] [--verify-deb-cache] [--iso PATH] | tmux [--iso PATH] | prepare_alpine_bundle [alpine_branch]"
         exit 1
       end
     end
@@ -1306,9 +1383,13 @@ module GRML
     class Act
       getter arguments : Array(String)
       getter boot_iso_path : String?
+      getter boot_profile : String?
+      getter boot_verify_deb_cache : Bool
       
       def initialize(@arguments : Array(String) = [] of String)
         @boot_iso_path = nil
+        @boot_profile = nil
+        @boot_verify_deb_cache = false
         validate_arguments
       end
       
@@ -1320,7 +1401,7 @@ module GRML
         Signal::INT.trap { agent.terminate && exit }
         Signal::TERM.trap { agent.terminate && exit }
         begin
-          agent.boot
+          agent.boot(@boot_profile, @boot_verify_deb_cache)
           perform(agent)
         ensure
           agent.terminate
@@ -1332,14 +1413,37 @@ module GRML
     
       class Boot < Act
         def validate_arguments
-          if @arguments.size == 2 && @arguments[0] == "--iso"
-            @boot_iso_path = @arguments[1]
-          else
-            unless @arguments.empty?
-              STDERR.puts "Usage: grml.agent boot [--iso PATH]"
-              exit 1
+          args = @arguments.dup
+          until args.empty?
+            argument = args.shift
+            case argument
+            when "--iso"
+              if args.empty? || @boot_iso_path
+                usage_error
+              end
+              @boot_iso_path = args.shift
+            when "--verify-deb-cache"
+              if @boot_verify_deb_cache
+                usage_error
+              end
+              @boot_verify_deb_cache = true
+            else
+              if argument.starts_with?("-") || @boot_profile
+                usage_error
+              end
+              unless argument.matches?(/\A[a-zA-Z0-9][a-zA-Z0-9._-]*\z/)
+                usage_error
+              end
+              @boot_profile = argument
             end
           end
+        
+          usage_error if @boot_verify_deb_cache && !@boot_profile
+        end
+        
+        private def usage_error : NoReturn
+          STDERR.puts "Usage: grml.agent boot [PROFILE_NAME] [--verify-deb-cache] [--iso PATH]"
+          exit 1
         end
         
         protected def perform(agent : GRML::Agent) : Nil

@@ -41,6 +41,9 @@ jobs:
       - name: Generate sources and build executable
         run: bundle exec rake
 
+      - name: Run Ruby CLI specs
+        run: bundle exec rspec
+
       - name: Run Crystal specs
         env:
           LAVINMQ_AMQP_UNIXSOCKET: /tmp/unused-test-amqp.sock

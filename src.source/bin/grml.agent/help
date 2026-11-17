@@ -1,11 +1,24 @@
 grml.agent boots GRML and provides an interactive host-side Tmux REPL.
 
 Usage:
-  grml.agent boot [--iso PATH]
+  grml.agent boot [PROFILE_NAME] [--verify-deb-cache] [--iso PATH]
   grml.agent tmux [--iso PATH]
   grml.agent prepare_alpine_bundle [alpine_branch]
   grml.agent --help
   grml.agent --version
+
+A boot profile installs Debian packages from the shared directory before
+starting the host REPL. Store one package name per line in:
+  shared/profiles/PROFILE_NAME/packages.txt
+Blank lines and lines beginning with # are ignored. For example:
+  shared/profiles/development/packages.txt
+
+Booting with a profile prepares the shared apt-cacher-ng cache first, then
+refreshes APT metadata through the proxy and installs the profile packages.
+Use --verify-deb-cache to additionally verify the cache after installation.
+This optional check downloads the default package (hello), disables upstream
+access temporarily, and confirms that the same package archive is served
+from the shared cache.
 
 The tmux command starts tmux inside the GRML guest and a separate host-side
 Tmux REPL connected to the same running VM. The host REPL supports:

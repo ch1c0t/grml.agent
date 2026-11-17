@@ -10,7 +10,7 @@ def self.run(arguments : Array(String) = ARGV.dup) : Nil
   when "prepare_alpine_bundle"
     Act::PrepareAlpineBundle.new(args).run
   else
-    STDERR.puts "Usage: grml.agent boot [--iso PATH] | tmux [--iso PATH] | prepare_alpine_bundle [alpine_branch]"
+    STDERR.puts "Usage: grml.agent boot [PROFILE_NAME] [--verify-deb-cache] [--iso PATH] | tmux [--iso PATH] | prepare_alpine_bundle [alpine_branch]"
     exit 1
   end
 end
