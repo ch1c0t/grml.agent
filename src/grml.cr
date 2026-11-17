@@ -4,34 +4,27 @@ require "tmux_repl"
 module GRML
 
   class Agent
-    module Boot
-      def boot(profile_name : String? = nil, verify_cache : Bool = false) : Nil
-        if verify_cache && profile_name.nil?
-          raise ArgumentError.new("--verify-deb-cache requires a boot profile")
-        end
+    module ApplyProfile
+      DEBIAN_PROFILE_DIRECTORY = "/mnt/shared/profiles"
+      DEBIAN_PROFILE_NAME_PATTERN = /\A[a-zA-Z0-9][a-zA-Z0-9._-]*\z/
       
-        navigate_boot_menu
-        wait_for_shell
-        verify_guest_agent
-        configure_console
-        verify_shared_directory
-      
-        Log.info { "GRML shared directory is operational" }
-        install_profile_packages(profile_name, verify_cache) if profile_name
-      end
-      
-      private def install_profile_packages(profile_name : String, verify_cache : Bool) : Nil
-        unless profile_name.matches?(/\A[a-zA-Z0-9][a-zA-Z0-9._-]*\z/)
+      def apply_profile(
+        profile_name : String,
+        verify_cache : Bool = false,
+        progress : Proc(String, Nil)? = nil
+      ) : Nil
+        unless profile_name.matches?(DEBIAN_PROFILE_NAME_PATTERN)
           raise ArgumentError.new("Invalid profile name: #{profile_name.inspect}")
         end
       
-        packages_file = "/mnt/shared/profiles/#{profile_name}/packages.txt"
-        Log.info { "Reading package list for boot profile '#{profile_name}'" }
+        packages_file = "#{DEBIAN_PROFILE_DIRECTORY}/#{profile_name}/packages.txt"
+        report_profile_progress(progress, "Reading package list for profile '#{profile_name}'")
+      
         command = <<-SHELL
           set -eu
           packages_file='#{packages_file}'
           if [ ! -f "$packages_file" ]; then
-            echo "Boot profile package list not found: $packages_file" >&2
+            echo "Package profile not found: $packages_file" >&2
             exit 2
           fi
       
@@ -51,25 +44,20 @@ module GRML
       
         profile_result = @interaction.execute(command)
         unless profile_result.success?
-          raise "Could not read boot profile '#{profile_name}' packages (exit=#{profile_result.exit_code}, stderr=#{profile_result.stderr.inspect})"
+          raise "Could not read package profile '#{profile_name}' (exit=#{profile_result.exit_code}, stderr=#{profile_result.stderr.inspect})"
         end
       
-        packages = profile_result.stdout.lines.map(&.strip).reject(&.empty?)
+        packages = profile_result.stdout.lines.map(&.strip).reject(&.empty?).uniq
         if packages.empty? && !verify_cache
-          Log.info { "Boot profile '#{profile_name}' contains no packages; skipping APT cache preparation" }
+          report_profile_progress(progress, "Profile '#{profile_name}' contains no packages; skipping APT cache preparation")
           return
         end
       
-        progress = ->(message : String) do
-          STDOUT.print(message)
-          STDOUT.flush
-        end
-      
-        Log.info { "Preparing shared Debian package cache for boot profile '#{profile_name}'" }
+        report_profile_progress(progress, "Preparing shared Debian package cache for profile '#{profile_name}'")
         prepare_deb_cache(progress)
       
         unless packages.empty?
-          Log.info { "Installing #{packages.size} package(s) from boot profile '#{profile_name}'" }
+          report_profile_progress(progress, "Installing #{packages.size} package(s) from profile '#{profile_name}'")
           install_command = <<-SHELL
             set -eu
             apt-get update
@@ -77,18 +65,59 @@ module GRML
             SHELL
       
           result = @interaction.execute_streaming(install_command, 30.minutes) do |_stream, chunk|
-            STDOUT.print(chunk)
-            STDOUT.flush
+            report_profile_output(progress, chunk)
           end
           unless result.success?
-            raise "Could not install packages for boot profile '#{profile_name}' (exit=#{result.exit_code}, stderr=#{result.stderr.inspect})"
+            raise "Could not install packages for profile '#{profile_name}' (exit=#{result.exit_code}, stderr=#{result.stderr.inspect})"
           end
-          Log.info { "Boot profile '#{profile_name}' packages installed" }
+          report_profile_progress(progress, "Profile '#{profile_name}' packages installed")
         end
       
         if verify_cache
-          Log.info { "Verifying shared Debian package cache after installing boot profile '#{profile_name}'" }
+          report_profile_progress(progress, "Verifying shared Debian package cache after applying profile '#{profile_name}'")
           verify_deb_cache("hello", progress)
+        end
+      end
+      
+      private def report_profile_output(progress : Proc(String, Nil)?, chunk : String) : Nil
+        return if chunk.empty?
+      
+        if callback = progress
+          callback.call(chunk)
+        else
+          Log.info { chunk }
+        end
+      end
+      
+      private def report_profile_progress(progress : Proc(String, Nil)?, message : String) : Nil
+        if callback = progress
+          callback.call("#{message}\n")
+        else
+          Log.info { message }
+        end
+      end
+    end
+  
+    module Boot
+      def boot(profile_name : String? = nil, verify_cache : Bool = false) : Nil
+        if verify_cache && profile_name.nil?
+          raise ArgumentError.new("--verify-deb-cache requires a boot profile")
+        end
+      
+        navigate_boot_menu
+        wait_for_shell
+        verify_guest_agent
+        configure_console
+        verify_shared_directory
+      
+        Log.info { "GRML shared directory is operational" }
+      
+        if profile_name
+          progress = ->(message : String) do
+            STDOUT.print(message)
+            STDOUT.flush
+          end
+          apply_profile(profile_name, verify_cache, progress)
         end
       end
       
@@ -1229,6 +1258,7 @@ module GRML
       @terminated = false
     end
     
+    include ApplyProfile
     include Boot
     include VerifySharedDirectory
     include PrepareAlpineBundle
@@ -1495,6 +1525,23 @@ module GRML
   end
 
   class REPL
+    module ApplyProfile
+      def apply_profile(agent : T, arguments : Array(String), progress : Proc(String, Nil)? = nil) : String forall T
+        unless arguments.size == 1
+          raise ArgumentError.new("Usage: apply_profile PROFILE_NAME")
+        end
+      
+        profile_name = arguments.first
+        unless profile_name.matches?(/\A[a-zA-Z0-9][a-zA-Z0-9._-]*\z/)
+          raise ArgumentError.new("Invalid profile name: #{profile_name.inspect}")
+        end
+      
+        agent.verify_shared_directory
+        agent.apply_profile(profile_name, false, progress)
+        "Applied package profile '#{profile_name}'. Package installation is additive; other packages are not removed."
+      end
+    end
+  
     module BuildDefinition
       def build_definition(agent : T) : TmuxREPL::Definition forall T
         Definition.build(agent)
@@ -1601,11 +1648,24 @@ module GRML
     extend Questions
     extend PrepareAlpineBundle
     extend PrepareDebCache
+    extend ApplyProfile
     extend VerifyDebCache
     extend BuildDefinition
     extend Run
   
     module Commands
+    
+      module ApplyProfile
+        NAME = "apply_profile"
+        
+        def self.register(repl : TmuxREPL::Definition, agent : T) : Nil forall T
+          repl.on_command(NAME) do |context, arguments|
+            progress = ->(message : String) { context.write(message) }
+            GRML::REPL.apply_profile(agent, arguments, progress)
+          end
+          nil
+        end
+      end
     
       module AttachDisk
         NAME = "attach_disk"
@@ -1748,6 +1808,7 @@ module GRML
           GRML::REPL::Commands::GuestExec.register(repl, agent)
           GRML::REPL::Commands::PrepareAlpineBundle.register(repl, agent)
           GRML::REPL::Commands::PrepareDebCache.register(repl, agent)
+          GRML::REPL::Commands::ApplyProfile.register(repl, agent)
           GRML::REPL::Commands::VerifyDebCache.register(repl, agent)
           GRML::REPL::Commands::CreateDisk.register(repl, agent)
           GRML::REPL::Commands::AttachDisk.register(repl, agent)
