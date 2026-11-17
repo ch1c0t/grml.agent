@@ -8,6 +8,11 @@ def validate_arguments
         usage_error
       end
       @boot_iso_path = args.shift
+    when "--verify-deb-cache"
+      if @boot_verify_deb_cache
+        usage_error
+      end
+      @boot_verify_deb_cache = true
     else
       if argument.starts_with?("-") || @boot_profile
         usage_error
@@ -18,10 +23,12 @@ def validate_arguments
       @boot_profile = argument
     end
   end
+
+  usage_error if @boot_verify_deb_cache && !@boot_profile
 end
 
 private def usage_error : NoReturn
-  STDERR.puts "Usage: grml.agent boot [PROFILE_NAME] [--iso PATH]"
+  STDERR.puts "Usage: grml.agent boot [PROFILE_NAME] [--verify-deb-cache] [--iso PATH]"
   exit 1
 end
 
