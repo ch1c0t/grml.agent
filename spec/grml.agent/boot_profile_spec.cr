@@ -159,7 +159,7 @@ describe GRML::Agent::Boot do
     interaction.profile_stderr = "Invalid Debian package name"
     agent = GRMLBootProfileHarness.new(interaction, events)
 
-    expect_raises(Exception, "Could not read boot profile") do
+    expect_raises(Exception, "Could not read package profile") do
       agent.boot("development")
     end
 
