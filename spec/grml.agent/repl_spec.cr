@@ -51,6 +51,7 @@ class FakeGRMLAgent
   getter deb_cache_preparations = 0
   getter deb_cache_verifications = [] of String
   getter applied_profiles = [] of String
+  getter shared_directory_verifications = 0
   getter created_disks = [] of Tuple(String, String, String)
   getter attached_disks = [] of Tuple(String, String)
   getter ext4_disks = [] of Tuple(String, String, String?, String)
@@ -70,6 +71,10 @@ class FakeGRMLAgent
   def prepare_deb_cache(progress : Proc(String, Nil)? = nil) : Nil
     @deb_cache_preparations += 1
     progress.try &.call("fake Debian cache preparation progress")
+  end
+
+  def verify_shared_directory : Nil
+    @shared_directory_verifications += 1
   end
 
   def apply_profile(profile_name : String, verify_cache : Bool = false, progress : Proc(String, Nil)? = nil) : Nil
@@ -201,6 +206,7 @@ describe GRML::REPL do
 
     result.should contain("development")
     result.should contain("additive")
+    agent.shared_directory_verifications.should eq(1)
     agent.applied_profiles.should eq(["development"])
     messages.should eq(["fake profile application progress"])
   end
