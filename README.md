@@ -30,17 +30,38 @@ Then boot with:
 ./bin/grml.agent boot development
 ```
 
-The guest installs those Debian packages before the host-side REPL starts.
-Each non-empty, non-comment line must be a Debian package name. Package
-installation runs as root and streams APT output to the terminal. If the
+Before installing a non-empty profile, the guest automatically prepares the
+shared Debian package cache using apt-cacher-ng. It then refreshes APT
+metadata through the proxy and installs the listed packages with
+`--no-install-recommends`. Preparation progress and APT output are streamed
+to the terminal. The first preparation may install apt-cacher-ng itself and
+therefore needs upstream network access unless apt-cacher-ng is already in
+the GRML image. Later boots reuse package archives stored under
+`shared/deb-cache/proxy`.
+
+Each non-empty, non-comment line must be a Debian package name. If the
 profile's `packages.txt` file is missing or contains an invalid package
-entry, boot fails with an error. Without a profile argument, boot does not
-install any additional packages. The optional ISO argument can be combined
-with a profile: `./bin/grml.agent boot development --iso ./cdrom/grml.iso`.
+entry, boot fails. An empty package list is a no-op. Without a profile
+argument, boot does not prepare the cache or install additional packages.
+The optional ISO argument can be combined with a profile:
+`./bin/grml.agent boot development --iso ./cdrom/grml.iso`.
+
+Use `--verify-deb-cache` to run the separate offline cache check after the
+profile packages have been installed:
+
+```sh
+./bin/grml.agent boot development --verify-deb-cache
+```
+
+This check downloads the current `hello` package through apt-cacher-ng,
+temporarily disables upstream access, and confirms that the same archive
+can be fetched again with a matching SHA-256 checksum. It is deliberately
+opt-in: it performs an additional online/offline test and may fail for
+repositories whose package payloads are not served over HTTP.
 
 ## Commands
 
-./bin/grml.agent boot [PROFILE_NAME] [--iso PATH]
+./bin/grml.agent boot [PROFILE_NAME] [--verify-deb-cache] [--iso PATH]
 ./bin/grml.agent tmux [--iso PATH]
 ./bin/grml.agent prepare_alpine_bundle [alpine_branch]
 
