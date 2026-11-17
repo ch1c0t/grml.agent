@@ -50,6 +50,8 @@ class FakeGRMLAgent
   getter prepared_branches = [] of String
   getter deb_cache_preparations = 0
   getter deb_cache_verifications = [] of String
+  getter applied_profiles = [] of String
+  getter shared_directory_verifications = 0
   getter created_disks = [] of Tuple(String, String, String)
   getter attached_disks = [] of Tuple(String, String)
   getter ext4_disks = [] of Tuple(String, String, String?, String)
@@ -69,6 +71,15 @@ class FakeGRMLAgent
   def prepare_deb_cache(progress : Proc(String, Nil)? = nil) : Nil
     @deb_cache_preparations += 1
     progress.try &.call("fake Debian cache preparation progress")
+  end
+
+  def verify_shared_directory : Nil
+    @shared_directory_verifications += 1
+  end
+
+  def apply_profile(profile_name : String, verify_cache : Bool = false, progress : Proc(String, Nil)? = nil) : Nil
+    @applied_profiles << profile_name
+    progress.try &.call("fake profile application progress")
   end
 
   def verify_deb_cache(package : String = "hello", progress : Proc(String, Nil)? = nil) : Nil
@@ -144,6 +155,7 @@ describe GRML::REPL do
   it "registers the commands contributed by each command module" do
     definition = GRML::REPL.build_definition(FakeGRMLAgent.new)
     definition.command_names.should eq([
+      "apply_profile",
       "attach_disk",
       "create_disk",
       "create_ext4_disk",
@@ -183,6 +195,36 @@ describe GRML::REPL do
     result.should contain("hello")
     agent.deb_cache_verifications.should eq(["hello"])
     messages.should eq(["fake Debian cache verification progress"])
+  end
+
+  it "applies one named package profile and forwards progress" do
+    agent = FakeGRMLAgent.new
+    messages = [] of String
+    progress = ->(message : String) { messages << message; nil }
+
+    result = GRML::REPL.apply_profile(agent, ["development"], progress)
+
+    result.should contain("development")
+    result.should contain("additive")
+    agent.shared_directory_verifications.should eq(1)
+    agent.applied_profiles.should eq(["development"])
+    messages.should eq(["fake profile application progress"])
+  end
+
+  it "rejects missing, multiple, or unsafe profile arguments" do
+    agent = FakeGRMLAgent.new
+
+    expect_raises(ArgumentError, "Usage: apply_profile PROFILE_NAME") do
+      GRML::REPL.apply_profile(agent, [] of String)
+    end
+    expect_raises(ArgumentError, "Usage: apply_profile PROFILE_NAME") do
+      GRML::REPL.apply_profile(agent, ["development", "minimal"])
+    end
+    expect_raises(ArgumentError, "Invalid profile name") do
+      GRML::REPL.apply_profile(agent, ["../development"])
+    end
+
+    agent.applied_profiles.should be_empty
   end
 
   it "accepts one safe package name for cache verification" do

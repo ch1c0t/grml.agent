@@ -37,6 +37,9 @@ Tmux REPL connected to the same running VM. The host REPL supports:
     Create and hot-attach a disk image, create a GPT partition, format it
     as ext4, and mount it inside the GRML guest. The default mount point is
     /mnt/<name>. Example: create_ext4_disk data 20G /mnt/data
+  apply_profile PROFILE_NAME
+    Apply a shared Debian package profile to the running guest. This installs
+    or updates listed packages and does not uninstall packages from other profiles.
   prepare_alpine_bundle [alpine_branch]
     Prepare and verify an offline Alpine APK repository bundle.
 
