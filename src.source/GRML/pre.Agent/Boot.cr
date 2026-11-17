@@ -1,4 +1,4 @@
-def boot : Nil
+def boot(profile_name : String? = nil) : Nil
   navigate_boot_menu
   wait_for_shell
   verify_guest_agent
@@ -6,6 +6,49 @@ def boot : Nil
   verify_shared_directory
 
   Log.info { "GRML shared directory is operational" }
+  install_profile_packages(profile_name) if profile_name
+end
+
+private def install_profile_packages(profile_name : String) : Nil
+  unless profile_name.matches?(/\\A[a-zA-Z0-9][a-zA-Z0-9._-]*\\z/)
+    raise ArgumentError.new("Invalid profile name: #{profile_name.inspect}")
+  end
+
+  packages_file = "/mnt/shared/profiles/#{profile_name}/packages.txt"
+  Log.info { "Installing packages from boot profile '#{profile_name}'" }
+  command = <<-SHELL
+    set -eu
+    packages_file='#{packages_file}'
+    if [ ! -f "$packages_file" ]; then
+      echo "Boot profile package list not found: $packages_file" >&2
+      exit 2
+    fi
+    packages=$(sed -e 's/#.*//' -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' "$packages_file" | sed '/^$/d')
+    if [ -z "$packages" ]; then
+      echo "Boot profile '#{profile_name}' contains no packages"
+      exit 0
+    fi
+    while IFS= read -r package; do
+      case "$package" in
+        *[!a-z0-9+.-]*|'')
+          echo "Invalid Debian package name in $packages_file: $package" >&2
+          exit 2
+          ;;
+      esac
+    done <<EOF
+    $packages
+    EOF
+    apt-get update
+    printf '%s\\n' "$packages" | xargs -r apt-get install -y --no-install-recommends
+    SHELL
+
+  result = @interaction.execute_streaming(command, 30.minutes) do |_stream, chunk|
+    STDOUT.print(chunk)
+  end
+  unless result.success?
+    raise "Could not install packages for boot profile '#{profile_name}' (exit=#{result.exit_code}, stderr=#{result.stderr.inspect})"
+  end
+  Log.info { "Boot profile '#{profile_name}' packages installed" }
 end
 
 private def navigate_boot_menu : Nil
