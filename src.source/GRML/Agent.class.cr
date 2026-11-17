@@ -9,6 +9,7 @@ def initialize(iso_path : String? = nil)
   @terminated = false
 end
 
+include ApplyProfile
 include Boot
 include VerifySharedDirectory
 include PrepareAlpineBundle

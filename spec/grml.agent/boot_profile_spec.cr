@@ -47,6 +47,7 @@ class GRMLBootProfileFakeInteraction
 end
 
 class GRMLBootProfileHarness
+  include GRML::Agent::ApplyProfile
   include GRML::Agent::Boot
 
   getter events : Array(String)
@@ -69,6 +70,30 @@ class GRMLBootProfileHarness
 end
 
 describe GRML::Agent::Boot do
+  it "applies a profile directly after the guest has booted" do
+    events = [] of String
+    interaction = GRMLBootProfileFakeInteraction.new(events)
+    agent = GRMLBootProfileHarness.new(interaction, events)
+
+    agent.apply_profile("development")
+
+    events.should eq(["read-profile", "prepare-cache", "install"])
+    interaction.streamed_commands.size.should eq(1)
+  end
+
+  it "rejects unsafe profile names before accessing the shared directory" do
+    events = [] of String
+    interaction = GRMLBootProfileFakeInteraction.new(events)
+    agent = GRMLBootProfileHarness.new(interaction, events)
+
+    expect_raises(ArgumentError, "Invalid profile name") do
+      agent.apply_profile("../development")
+    end
+
+    events.should be_empty
+    interaction.streamed_commands.should be_empty
+  end
+
   it "prepares the shared cache before refreshing metadata and installing profile packages" do
     events = [] of String
     interaction = GRMLBootProfileFakeInteraction.new(events)

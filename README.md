@@ -44,6 +44,17 @@ profile's `packages.txt` file is missing or contains an invalid package
 entry, boot fails. An empty package list skips installation; with `--verify-deb-cache`, the
 cache is still prepared and checked. Without a profile argument, boot does
 not prepare the cache or install additional packages.
+
+After the guest is running, apply a profile from the host-side REPL without
+rebooting:
+
+```text
+apply_profile development
+```
+
+Profile application is additive: it installs or updates the listed packages,
+but does not uninstall packages omitted from the selected profile. Applying
+another profile therefore does not undo packages installed by an earlier one.
 The optional ISO argument can be combined with a profile:
 `./bin/grml.agent boot development --iso ./cdrom/grml.iso`.
 
@@ -83,6 +94,9 @@ Tmux REPL attached to the same running VM. The host REPL provides:
   guest mount point is /mnt/<name>.
 - prepare_alpine_bundle [alpine_branch] — create and verify an offline
   Alpine APK repository bundle.
+- apply_profile <PROFILE_NAME> — install or update Debian packages listed
+  in `shared/profiles/PROFILE_NAME/packages.txt` in the running guest. This
+  is additive and does not remove packages from other profiles.
 - prepare_deb_cache — configure apt-cacher-ng to cache Debian package
   downloads under /mnt/shared/deb-cache.
 - verify_deb_cache [package] — disable upstream access temporarily and verify
