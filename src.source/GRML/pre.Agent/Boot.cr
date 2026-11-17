@@ -113,7 +113,7 @@ end
 
 private def configure_console : Nil
   Log.info { "Setting GRML console font size to 12x24" }
-  result = @interaction.execute("sed -i 's|^FONTSIZE=.*|FONTSIZE=\\"12x24\\"|' /etc/default/console-setup && grep -Fqx 'FONTSIZE=\\\"12x24\\\"' /etc/default/console-setup && setupcon")
+  result = @interaction.execute("sed -i 's|^FONTSIZE=.*|FONTSIZE=\"12x24\"|' /etc/default/console-setup && grep -Fqx 'FONTSIZE=\"12x24\"' /etc/default/console-setup && setupcon")
   unless result.success?
     raise "Could not configure GRML console font size (exit=#{result.exit_code}, stderr=#{result.stderr.inspect})"
   end
