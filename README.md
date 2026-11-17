@@ -10,9 +10,37 @@ bundle install
 shards install
 bundle exec rake
 
+## Boot package profiles
+
+The optional profile argument to `grml.agent boot` selects a package list
+from the QEMU shared directory. For example, create
+`shared/profiles/development/packages.txt` on the host:
+
+```text
+# Tools for a development environment
+git
+vim
+tmux
+build-essential
+```
+
+Then boot with:
+
+```sh
+./bin/grml.agent boot development
+```
+
+The guest installs those Debian packages before the host-side REPL starts.
+Each non-empty, non-comment line must be a Debian package name. Package
+installation runs as root and streams APT output to the terminal. If the
+profile's `packages.txt` file is missing or contains an invalid package
+entry, boot fails with an error. Without a profile argument, boot does not
+install any additional packages. The optional ISO argument can be combined
+with a profile: `./bin/grml.agent boot development --iso ./cdrom/grml.iso`.
+
 ## Commands
 
-./bin/grml.agent boot [--iso PATH]
+./bin/grml.agent boot [PROFILE_NAME] [--iso PATH]
 ./bin/grml.agent tmux [--iso PATH]
 ./bin/grml.agent prepare_alpine_bundle [alpine_branch]
 
