@@ -41,8 +41,9 @@ the GRML image. Later boots reuse package archives stored under
 
 Each non-empty, non-comment line must be a Debian package name. If the
 profile's `packages.txt` file is missing or contains an invalid package
-entry, boot fails. An empty package list is a no-op. Without a profile
-argument, boot does not prepare the cache or install additional packages.
+entry, boot fails. An empty package list skips installation; with `--verify-deb-cache`, the
+cache is still prepared and checked. Without a profile argument, boot does
+not prepare the cache or install additional packages.
 The optional ISO argument can be combined with a profile:
 `./bin/grml.agent boot development --iso ./cdrom/grml.iso`.
 
