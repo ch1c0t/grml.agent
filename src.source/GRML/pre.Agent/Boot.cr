@@ -10,7 +10,7 @@ def boot(profile_name : String? = nil) : Nil
 end
 
 private def install_profile_packages(profile_name : String) : Nil
-  unless profile_name.matches?(/\\A[a-zA-Z0-9][a-zA-Z0-9._-]*\\z/)
+  unless profile_name.matches?(/\A[a-zA-Z0-9][a-zA-Z0-9._-]*\z/)
     raise ArgumentError.new("Invalid profile name: #{profile_name.inspect}")
   end
 
