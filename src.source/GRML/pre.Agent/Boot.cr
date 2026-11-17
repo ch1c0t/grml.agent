@@ -28,16 +28,10 @@ private def install_profile_packages(profile_name : String) : Nil
       echo "Boot profile '#{profile_name}' contains no packages"
       exit 0
     fi
-    while IFS= read -r package; do
-      case "$package" in
-        *[!a-z0-9+.-]*|'')
-          echo "Invalid Debian package name in $packages_file: $package" >&2
-          exit 2
-          ;;
-      esac
-    done <<EOF
-    $packages
-    EOF
+    if ! printf '%s\\n' "$packages" | awk 'BEGIN { ok = 1 } !/^[a-z0-9][a-z0-9+.-]*$/ { ok = 0 } END { exit !ok }'; then
+      echo "Invalid Debian package name in $packages_file" >&2
+      exit 2
+    fi
     apt-get update
     printf '%s\\n' "$packages" | xargs -r apt-get install -y --no-install-recommends
     SHELL
