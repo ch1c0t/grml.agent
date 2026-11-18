@@ -36,7 +36,8 @@ grml-live build profiles:
 Host REPL workflow:
   prepare_build_environment PROFILE_NAME
     Install grml-live prerequisites, configure the unprivileged build account
-    and user namespaces, and check out the grml-live revision from build.yml.
+    and user namespaces, provision or reuse the persistent ext4 build disk,
+    and check out the grml-live revision from build.yml.
   validate_profile PROFILE_NAME
     Validate build.yml, builder package names, custom class definitions, and
     the profile file tree.
@@ -46,8 +47,12 @@ Host REPL workflow:
 
 grml-live requires an unprivileged user with working user namespaces and
 subordinate UID/GID ranges. grml.agent creates a dedicated grml-live-builder
-account. Build temporary files stay under /var/tmp; output is copied to the
-shared directory after the build. Select only profiles and scripts you trust.
+account and provisions a persistent 32 GiB qcow2 disk at ./disks/grml-live-build.qcow2,
+mounted as ext4 at /mnt/grml-live-build in the guest. Build staging, chroot,
+temporary files, and output use that filesystem. The disk is reused across
+build runs and guest restarts; an existing non-ext4 filesystem is never
+reformatted. Output is copied to the shared directory after the build.
+Select only profiles and scripts you trust.
 
 Other host REPL commands:
   ocr

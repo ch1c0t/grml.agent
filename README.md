@@ -185,9 +185,14 @@ before starting a build.
 
 The build combines the checked-out upstream grml-live/config with the
 profile's configuration overrides and runs grml-live image-create as the
-unprivileged builder. Its temporary chroot and working directory stay on the
-guest's local /var/tmp; completed artifacts and logs are copied to the
-shared directory:
+unprivileged builder. Preparation creates or reuses a sparse 32 GiB qcow2
+disk at ./disks/grml-live-build.qcow2 on the host and mounts its ext4
+filesystem at /mnt/grml-live-build in the guest. The disk persists across
+guest reboots and build runs. An existing ext4 filesystem is reused; an
+unexpected filesystem is never reformatted. The stage directory, chroot,
+temporary files, and grml-live output all live on this guest-local ext4
+filesystem rather than the root filesystem or the QEMU shared directory.
+Completed artifacts and logs are copied to the shared directory:
 
 ~~~text
 shared/grml-live/runs/rescue/RUN_ID/
@@ -198,8 +203,9 @@ shared/grml-live/runs/rescue/RUN_ID/
     └── grml_logs/
 ~~~
 
-The build command checks free space and the /var/tmp mount options before
-running. A successful build must produce at least one ISO. The grml-live
+The build command verifies that /mnt/grml-live-build is a dedicated ext4
+mount with sufficient free space and without nodev, noexec, or nosuid mount
+options. A successful build must produce at least one ISO. The grml-live
 commit used for the build and its exit status are recorded alongside the
 artifacts. Pin grml_live_ref to a commit SHA, set wayback_date to a
 Debian snapshot, and set source_date_epoch when repeatable source and
