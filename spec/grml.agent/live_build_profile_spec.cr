@@ -50,6 +50,7 @@ describe GRML::Agent::ValidateBuildProfile do
     interaction.commands[1].should contain("python3 -")
     interaction.commands[2].should contain("builder-packages.txt")
     interaction.commands[3].should contain("RESCUE")
+    interaction.commands[3].should contain("bootstrap-keyring")
     messages.last.should contain("is valid")
   end
 

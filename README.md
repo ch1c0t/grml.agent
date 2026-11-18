@@ -85,6 +85,7 @@ shared/profiles/rescue/
 └── grml-live/
     ├── build.yml                # grml-live command-line settings
     ├── config/                  # overlays merged over upstream grml-live/config
+    │   ├── bootstrap-keyring/    # optional per-class mmdebstrap signing keys
     │   ├── package_config/
     │   │   └── RESCUE            # packages installed into the resulting ISO
     │   ├── debconf/
@@ -94,18 +95,22 @@ shared/profiles/rescue/
     │   ├── scripts/
     │   ├── media-files/
     │   ├── media-scripts/
-    │   └── tools/
+    │   ├── tools/
+    │   └── grml/                  # global grml-live configuration
     └── chroot-install/           # optional files installed under / in the chroot
 ~~~
 
 The directories under grml-live/config/ use the class-based configuration
 format expected by grml-live. For each selected custom class, add one or more
 definitions under the corresponding configuration directories. For example,
-package_config/RESCUE defines software installed inside the ISO; scripts,
-hooks, debconf preseeding, file overlays, and media customizations can be
-provided by the other directories. The profile configuration is merged over
-the selected grml-live checkout's default configuration, so it does not need
-to copy the upstream GRMLBASE or GRML_SMALL definitions.
+package_config/RESCUE defines software installed inside the ISO;
+bootstrap-keyring/RESCUE can provide the signing keyring used by mmdebstrap;
+scripts, hooks, debconf preseeding, file overlays, and media customizations
+can be provided by the other directories. The grml/ directory holds global
+settings such as squashfs exclusions. The profile configuration is merged
+over the selected grml-live checkout's default configuration, so it does not
+need to copy the upstream GRMLBASE or GRML_SMALL definitions. Profile files
+must not be symbolic links.
 
 Example grml-live/build.yml:
 
@@ -131,6 +136,10 @@ boot_options:
 secure_boot: false
 release: false
 bootstrap_mirror_url: http://deb.debian.org/debian
+
+# Optional Debian snapshot date (YYYYMMDD or YYYYMMDDTHHMMSSZ).
+# This applies to the plain Debian repositories used for bootstrap.
+# wayback_date: "20261101"
 
 # Pin a commit SHA for repeatable source selection; master follows upstream.
 grml_live_ref: master
@@ -188,10 +197,12 @@ shared/grml-live/runs/rescue/RUN_ID/
 The build command checks free space and the /var/tmp mount options before
 running. A successful build must produce at least one ISO. The grml-live
 commit used for the build and its exit status are recorded alongside the
-artifacts. Pin grml_live_ref to a commit SHA and set source_date_epoch
-when repeatable source and timestamp selection matters. Selecting
-NO_ONLINE disables certain network-dependent build scripts; it does not
-make package downloads offline by itself.
+artifacts. Pin grml_live_ref to a commit SHA, set wayback_date to a
+Debian snapshot, and set source_date_epoch when repeatable source and
+timestamp selection matters. wayback_date applies to the plain Debian
+repositories used for bootstrap; it does not pin Grml or custom repositories.
+Selecting NO_ONLINE disables certain network-dependent build scripts; it does
+not make package downloads offline by itself.
 
 Profiles contain executable build scripts and hooks that run inside the
 grml-live build process. Only build profiles and configuration you trust

@@ -232,6 +232,9 @@ private def grml_live_build_command(
   if build_date = manifest.date
     args << "-d" << shell_quote(build_date)
   end
+  if wayback_date = manifest.wayback_date
+    args << "-w" << shell_quote(wayback_date)
+  end
   args << "-I" << shell_quote(install_directory) if directory_exists_in_guest?(install_directory)
   args << shell_quote(output_directory)
 

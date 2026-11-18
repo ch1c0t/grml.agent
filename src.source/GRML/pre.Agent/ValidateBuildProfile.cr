@@ -1,7 +1,7 @@
 BUILD_PROFILE_ROOT = "/mnt/shared/profiles"
 BUILD_PROFILE_BUILDER_PACKAGES = "builder-packages.txt"
 BUILD_PROFILE_BUILTIN_CLASSES = LiveBuildManifest::BUILTIN_CLASSES
-BUILD_PROFILE_CONFIG_DIRECTORIES = %w(package_config debconf env files hooks scripts media-files media-scripts tools)
+BUILD_PROFILE_CONFIG_DIRECTORIES = %w(bootstrap-keyring package_config debconf env files hooks scripts media-files media-scripts tools)
 
 def validate_profile(profile_name : String, progress : Proc(String, Nil)? = nil) : LiveBuildManifest
   validate_build_profile_name(profile_name)
@@ -71,7 +71,7 @@ private def read_build_manifest(path : String) : LiveBuildManifest
         "suite", "classes", "hostname", "username", "distri_name",
         "distri_info", "grml_name", "release_name", "version",
         "boot_options", "secure_boot", "release", "bootstrap_mirror_url",
-        "grml_live_ref", "iso_name", "date", "source_date_epoch",
+        "grml_live_ref", "iso_name", "date", "wayback_date", "source_date_epoch",
     }
 
     def normalize(value):

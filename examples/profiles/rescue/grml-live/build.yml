@@ -20,5 +20,8 @@ secure_boot: false
 release: false
 bootstrap_mirror_url: http://deb.debian.org/debian
 
+# Optional Debian snapshot date (YYYYMMDD or YYYYMMDDTHHMMSSZ).
+# wayback_date: "20261101"
+
 # Pin this to a grml-live commit SHA for repeatable source selection.
 grml_live_ref: master

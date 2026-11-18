@@ -14,6 +14,7 @@
   property grml_live_ref : String = "master"
   property iso_name : String? = nil
   property date : String? = nil
+  property wayback_date : String? = nil
   property source_date_epoch : Int64? = nil
 
   def self.from_json(source : String) : self
@@ -39,6 +40,7 @@
       grml_live_ref: data["grml_live_ref"]?.try(&.as_s) || "master",
       iso_name: data["iso_name"]?.try(&.as_s?),
       date: data["date"]?.try(&.as_s?),
+      wayback_date: data["wayback_date"]?.try(&.as_s?),
       source_date_epoch: data["source_date_epoch"]?.try(&.as_i64?)
     )
   end
@@ -60,6 +62,7 @@
     @grml_live_ref : String = "master",
     @iso_name : String? = nil,
     @date : String? = nil,
+    @wayback_date : String? = nil,
     @source_date_epoch : Int64? = nil
   )
   end
@@ -128,6 +131,12 @@
     if build_date = date
       unless build_date.matches?(/\A[0-9]{4}-[0-9]{2}-[0-9]{2}\z/)
         raise ArgumentError.new("date must use YYYY-MM-DD format")
+      end
+    end
+
+    if snapshot = wayback_date
+      unless snapshot.matches?(/\\A[0-9]{8}(?:T[0-9]{6}Z)?\\z/)
+        raise ArgumentError.new("wayback_date must use YYYYMMDD or YYYYMMDDTHHMMSSZ format")
       end
     end
 

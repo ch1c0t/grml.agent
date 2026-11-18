@@ -21,6 +21,7 @@ describe GRML::LiveBuildManifest do
       "grml_live_ref": "master",
       "iso_name": "rescue_0.1.0.iso",
       "date": "2026-11-18",
+      "wayback_date": "20261101",
       "source_date_epoch": 1794950400
     }))
 
@@ -29,6 +30,7 @@ describe GRML::LiveBuildManifest do
     manifest.boot_options.join(" ").should eq("ssh net.ifnames=0")
     manifest.release.should be_false
     manifest.iso_name.should eq("rescue_0.1.0.iso")
+    manifest.wayback_date.should eq("20261101")
   end
 
   it "uses useful defaults for an omitted optional setting" do
@@ -74,5 +76,8 @@ describe GRML::LiveBuildManifest do
 
     unsafe_options = GRML::LiveBuildManifest.from_json(%({"boot_options":["ssh\\nrm -rf /"]}))
     expect_raises(ArgumentError, "Invalid boot option") { unsafe_options.validate! }
+
+    unsafe_snapshot = GRML::LiveBuildManifest.from_json(%({"wayback_date":"2026-11-01"}))
+    expect_raises(ArgumentError, "wayback_date must use") { unsafe_snapshot.validate! }
   end
 end
