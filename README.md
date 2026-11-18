@@ -104,10 +104,12 @@ The directories under grml-live/config/ use the class-based configuration
 format expected by grml-live. For each selected custom class, add one or more
 definitions under the corresponding configuration directories. For example,
 package_config/RESCUE defines software installed inside the ISO;
-bootstrap-keyring/RESCUE can provide the signing keyring used by mmdebstrap;
+bootstrap-keyring/DEBIAN_TRIXIE can override the Debian suite keyring used by mmdebstrap;
 scripts, hooks, debconf preseeding, file overlays, and media customizations
-can be provided by the other directories. The grml/ directory holds global
-settings such as squashfs exclusions. The profile configuration is merged
+can be provided by the other directories. The last matching class with a bootstrap-keyring file is selected by minifai,
+so overriding the automatically selected suite keyring uses its exact class
+name (for example, DEBIAN_TRIXIE). The grml/ directory holds global settings
+such as squashfs exclusions. The profile configuration is merged
 over the selected grml-live checkout's default configuration, so it does not
 need to copy the upstream GRMLBASE or GRML_SMALL definitions. Filesystem
 overlays preserve symbolic links, which can be useful for system configuration

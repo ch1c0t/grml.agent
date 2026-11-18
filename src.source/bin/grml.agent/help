@@ -24,8 +24,10 @@ grml-live build profiles:
   shared/profiles/PROFILE_NAME/grml-live/config/
     Class-based configuration overlays merged over upstream grml-live/config.
     Use package_config/CLASS for ISO package selection, bootstrap-keyring/CLASS
-    for mmdebstrap signing keys, and debconf/, env/, files/, hooks/, scripts/,
-    media-files/, media-scripts/, and tools/ for build-time customization.
+    for mmdebstrap signing keys (use the automatically selected
+    DEBIAN_<suite> filename to override the Debian suite keyring), and debconf/,
+    env/, files/, hooks/, scripts/, media-files/, media-scripts/, and tools/
+    for build-time customization.
     The grml/ directory holds global grml-live settings. Filesystem overlays
     preserve symbolic links for system configuration.
   shared/profiles/PROFILE_NAME/grml-live/chroot-install/
