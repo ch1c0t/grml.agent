@@ -827,40 +827,80 @@ module GRML
           end
         end
       
+        module BuildEnvironmentCommandError
+          private def build_environment_command_error(label, exit_code, stdout, stderr) : String
+            details = ["stderr:\n#{stderr}", "stdout:\n#{stdout}"].reject { |item| item.ends_with?(":\n") }
+            details = ["No output was captured; inspect the persistent diagnostic log."] if details.empty?
+            base = "/var/log/grml-agent/build-environment/#{label}"
+            "Build environment command '#{label}' failed (exit=#{exit_code}):\n#{details.join("\n")}\nScript: #{base}.sh\nLog: #{base}.log"
+          end
+        end
+      
+        module BuildEnvironmentDiagnosticCommand
+          private def build_environment_diagnostic_command(command : String, label : String) : String
+            unless label.matches?(/\A[a-z0-9][a-z0-9-]*\z/)
+              raise ArgumentError.new("Invalid build diagnostic label: #{label.inspect}")
+            end
+            script = build_environment_diagnostic_script(command)
+            directory = "/var/log/grml-agent/build-environment"
+            wrapper = [
+              "set -eu", "mkdir -p #{directory}",
+              "log_path=#{directory}/#{label}.log",
+              "script_path=#{directory}/#{label}.sh",
+              ": > \"$log_path\"",
+              "printf '%s\\n' #{shell_quote(script)} > \"$script_path\"",
+              "exec > >(tee -a \"$log_path\") 2> >(tee -a \"$log_path\" >&2)",
+              "printf '[diagnostics] script: %s\\n[diagnostics] log: %s\\n' \"$script_path\" \"$log_path\"",
+              "bash \"$script_path\"",
+            ].join("\n")
+            "/bin/bash -c #{shell_quote(wrapper)}"
+          end
+        end
+      
+        module BuildEnvironmentDiagnosticScript
+          private def build_environment_diagnostic_script(command : String) : String
+            [
+              "set -Eeuo pipefail",
+              "trap 'status=$?; printf \"[command failed] exit=%s line=%s command=%s\\n\" \"$status\" \"$LINENO\" \"$BASH_COMMAND\" >&2' ERR",
+              "set -x",
+              command,
+            ].join("\n")
+          end
+        end
+      
         module BuildSubordinateIDCommand
           private def build_subordinate_id_command : String
-            <<-PYTHON
-              python3 - <<'PY'
-              from pathlib import Path
-              username, count = "#{GRML_LIVE_BUILDER}", 65536
-          
-              def ensure_range(filename):
-                  path = Path(filename)
-                  path.touch(exist_ok=True)
-                  entries = []
-                  for line in path.read_text(encoding="utf-8").splitlines():
-                      fields = line.split(":")
-                      if len(fields) == 3:
-                          try:
-                              entries.append((fields[0], int(fields[1]), int(fields[2])))
-                          except ValueError:
-                              pass
-                  if any(name == username and size >= count for name, _, size in entries):
-                      return
-                  start = 100000
-                  while True:
-                      ends = [first + size for _, first, size in entries
-                              if start < first + size and start + count > first]
-                      if not ends:
-                          break
-                      start = max(ends)
-                  with path.open("a", encoding="utf-8") as stream:
-                      stream.write(f"{username}:{start}:{count}\\n")
-          
-              ensure_range("/etc/subuid")
-              ensure_range("/etc/subgid")
-              PY
-            PYTHON
+            "python3 -c #{shell_quote(build_subordinate_id_script)}"
+          end
+        end
+      
+        module BuildSubordinateIDScript
+          private def build_subordinate_id_script : String
+            [
+              "from pathlib import Path",
+              "username, count = \"#{GRML_LIVE_BUILDER}\", 65536",
+              "def ensure_range(filename):",
+              "    path = Path(filename)",
+              "    path.touch(exist_ok=True)",
+              "    entries = []",
+              "    for line in path.read_text(encoding=\"utf-8\").splitlines():",
+              "        fields = line.split(\":\")",
+              "        if len(fields) == 3:",
+              "            try:",
+              "                entries.append((fields[0], int(fields[1]), int(fields[2])))",
+              "            except ValueError:",
+              "                continue",
+              "    if any(name == username and size >= count for name, _, size in entries): return",
+              "    start = 100000",
+              "    while True:",
+              "        ends = [first + size for _, first, size in entries if start < first + size and start + count > first]",
+              "        if not ends: break",
+              "        start = max(ends)",
+              "    with path.open(\"a\", encoding=\"utf-8\") as stream:",
+              "        stream.write(f\"{username}:{start}:{count}\\n\")",
+              "ensure_range(\"/etc/subuid\")",
+              "ensure_range(\"/etc/subgid\")",
+            ].join("\n")
           end
         end
       
@@ -921,7 +961,7 @@ module GRML
         module PrepareBuildBuilderAccount
           private def prepare_build_builder_account(progress : Proc(String, Nil)?) : Nil
             report_build_environment_stage(4, "Preparing unprivileged builder account and UID/GID mappings", progress) do
-              run_build_environment_command(build_builder_account_command, 60.seconds, progress)
+              run_build_environment_command(build_builder_account_command, 60.seconds, progress, "builder-account")
             end
           end
         end
@@ -939,7 +979,7 @@ module GRML
             all_packages = (GRML_LIVE_BUILDER_PACKAGES + packages).uniq
             report_build_environment_stage(3, "Installing grml-live build dependencies", progress) do
               report_build_profile_progress(progress, "Builder packages: #{all_packages.size}")
-              run_build_environment_command(build_dependencies_command(all_packages), 45.minutes, progress)
+              run_build_environment_command(build_dependencies_command(all_packages), 45.minutes, progress, "dependencies")
             end
           end
         end
@@ -988,17 +1028,17 @@ module GRML
         end
       
         module RunBuildEnvironmentCommand
-          private def run_build_environment_command(
-            command : String,
-            timeout : Time::Span,
-            progress : Proc(String, Nil)?
-          ) : Nil
-            result = @interaction.execute_streaming(command, timeout) do |_stream, chunk|
+          private def run_build_environment_command(command, timeout, progress, label = "command") : Nil
+            stdout, stderr = IO::Memory.new, IO::Memory.new
+            wrapped = build_environment_diagnostic_command(command, label)
+            result = @interaction.execute_streaming(wrapped, timeout) do |stream, chunk|
+              (stream == :stderr ? stderr : stdout).write(chunk.to_slice)
               report_build_environment_output(progress, chunk)
             end
-            unless result.success?
-              raise "Build environment command failed (exit=#{result.exit_code}):\n#{result.stderr}\n#{result.stdout}"
-            end
+            return if result.success?
+            stdout_text = stdout.to_s.empty? ? result.stdout : stdout.to_s
+            stderr_text = stderr.to_s.empty? ? result.stderr : stderr.to_s
+            raise build_environment_command_error(label, result.exit_code, stdout_text, stderr_text)
           end
         end
       
@@ -1009,6 +1049,9 @@ module GRML
         include ReportBuildEnvironmentOutput
         include ReportBuildEnvironmentStage
         include RunBuildEnvironmentCommand
+        include BuildEnvironmentDiagnosticCommand
+        include BuildEnvironmentDiagnosticScript
+        include BuildEnvironmentCommandError
         include PrepareBuildProfile
         include PrepareBuildCache
         include PrepareBuildDependencies
@@ -1016,6 +1059,7 @@ module GRML
         include PrepareBuildBuilderAccount
         include BuildBuilderAccountCommand
         include BuildSubordinateIDCommand
+        include BuildSubordinateIDScript
       end
     
       module Public
