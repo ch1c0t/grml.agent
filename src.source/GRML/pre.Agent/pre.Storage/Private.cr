@@ -21,3 +21,5 @@ include VerifyExt4Mount
 include CreateExt4Partition
 include FormatExt4Partition
 include MountExt4Partition
+include DiskSizeMultiplier
+include DiskImageVirtualSize
