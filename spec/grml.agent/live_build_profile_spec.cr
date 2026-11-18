@@ -12,7 +12,11 @@ class GRMLBuildProfileValidationFakeInteraction
     @commands << command
 
     if command.includes?("find '/mnt/shared/profiles/rescue' -type l")
-      QEMU::CommandResult.new(0, @symlink_output, "")
+      if @symlink_output.empty?
+        QEMU::CommandResult.new(0, "", "")
+      else
+        QEMU::CommandResult.new(3, "", "Profile files must not be symbolic links: #{@symlink_output}")
+      end
     elsif command.includes?("python3 -")
       QEMU::CommandResult.new(0, @manifest_json, "")
     elsif command.includes?("awk '")
