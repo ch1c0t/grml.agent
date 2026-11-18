@@ -1461,6 +1461,27 @@ module GRML
           end
         end
       
+        module DiskImageVirtualSize
+          private def disk_image_virtual_size(json : String) : Int64
+            JSON.parse(json).as_h["virtual-size"].as_i64
+          rescue ex
+            raise "Invalid qemu-img virtual-size JSON: #{ex.message}"
+          end
+        end
+      
+        module DiskSizeMultiplier
+          private def disk_size_multiplier(unit : String?) : Int64
+            case unit
+            when "K" then 1024_i64
+            when "M" then 1_048_576_i64
+            when "G" then 1_073_741_824_i64
+            when "T" then 1_099_511_627_776_i64
+            when "P" then 1_125_899_906_842_624_i64
+            else        1_i64
+            end
+          end
+        end
+      
         module EnsureExt4Disk
           private def ensure_ext4_disk(
             name : String, size : String, mountpoint : String,
@@ -1710,25 +1731,14 @@ module GRML
           private def verify_disk_image_size(path : String, format : String, requested_size : String) : Nil
             match = /\A([1-9][0-9]*)([KMGTP])?\z/i.match(requested_size)
             raise ArgumentError.new("Invalid disk size: #{requested_size.inspect}") unless match
-          
-            multiplier = case match[2]?.try(&.upcase)
-                         when "K" then 1024_i64
-                         when "M" then 1024_i64 ** 2
-                         when "G" then 1024_i64 ** 3
-                         when "T" then 1024_i64 ** 4
-                         when "P" then 1024_i64 ** 5
-                         else        1_i64
-                         end
+            multiplier = disk_size_multiplier(match[2]?.try(&.upcase))
             expected_bytes = match[1].to_i64 * multiplier
-          
-            output = IO::Memory.new
-            error = IO::Memory.new
+            output, error = IO::Memory.new, IO::Memory.new
             result = Process.run("qemu-img", ["info", "--output=json", "-f", format, path], output: output, error: error)
             unless result.success?
-              raise "qemu-img could not inspect #{path} (#{result.exit_code}): #{error.to_s.strip}"
+              raise "qemu-img could not inspect #{path} (#{result.exit_code}): #{error}"
             end
-          
-            actual_bytes = JSON.parse(output.to_s).as_h["virtual-size"].as_i
+            actual_bytes = disk_image_virtual_size(output.to_s)
             if actual_bytes < expected_bytes
               raise "Disk image #{path} is too small: #{actual_bytes} bytes, #{expected_bytes} required"
             end
@@ -1791,6 +1801,8 @@ module GRML
         include CreateExt4Partition
         include FormatExt4Partition
         include MountExt4Partition
+        include DiskSizeMultiplier
+        include DiskImageVirtualSize
       end
     
       module Public
