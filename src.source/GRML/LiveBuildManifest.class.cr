@@ -1,4 +1,3 @@
-class LiveBuildManifest
   property suite : String = "trixie"
   property classes : Array(String) = ["GRML_SMALL"]
   property hostname : String = "grml"
@@ -152,4 +151,3 @@ class LiveBuildManifest
       raise ArgumentError.new("Invalid #{label}")
     end
   end
-end
