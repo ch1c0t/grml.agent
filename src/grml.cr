@@ -1499,7 +1499,7 @@ module GRML
           private def ensure_ext4_disk_attachment(path, name, format, progress) : Nil
             suffix = name == "grml-live-build" ? "live_build" : name.gsub(/[^A-Za-z0-9_-]/, "_")
             device_id = "grml_virtio_disk_#{suffix}"
-            attached_path = find_attached_disk_path(device_id)
+            attached_path = find_named_block_node_path("grml_disk_#{suffix}")
             if attached_path
               unless File.expand_path(attached_path) == path
                 raise "QEMU device #{device_id} is attached to another image: #{attached_path}"
@@ -1619,6 +1619,25 @@ module GRML
           end
         end
       
+        module FindNamedBlockNode
+          private def find_named_block_node(node_name : String) : JSON::Any?
+            response = execute_qmp_checked("query-named-block-nodes", Hash(String, JSON::Any).new)
+            records = response.as_h["return"]?.try(&.as_a)
+            raise "QMP query-named-block-nodes returned no node list" unless records
+            records.find { |item| item.as_h["node-name"]?.try(&.as_s) == node_name }
+          end
+        end
+      
+        module FindNamedBlockNodePath
+          private def find_named_block_node_path(node_name : String) : String?
+            node = find_named_block_node(node_name)
+            return unless node
+            path = node.as_h["file"]?.try(&.as_s)
+            raise "QMP reports #{node_name} without a backing-file path" unless path
+            path
+          end
+        end
+      
         module FormatExt4Partition
           private def format_ext4_partition : String
             <<-SCRIPT
@@ -1663,7 +1682,7 @@ module GRML
               path = create_disk_image(name, size, format)
             end
             suffix = name == "grml-live-build" ? "live_build" : name.gsub(/[^A-Za-z0-9_-]/, "_")
-            attached = find_attached_disk_info("grml_virtio_disk_#{suffix}")
+            attached = find_named_block_node("grml_disk_#{suffix}")
             if attached
               report_storage_progress(progress, "Verifying attached image metadata through QMP")
               verify_attached_disk_image(attached, path, format, size)
@@ -1819,6 +1838,8 @@ module GRML
         include Ext4ProvisioningCommand
         include FindAttachedDiskInfo
         include FindAttachedDiskPath
+        include FindNamedBlockNode
+        include FindNamedBlockNodePath
         include ShellQuote
         include ValidateDiskFormat
         include ValidateDiskName
