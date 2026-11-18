@@ -36,6 +36,10 @@ private def verify_profile_tree(profile_directory : String) : Nil
       echo "Profile directory not found: #{profile_directory}" >&2
       exit 2
     fi
+    if [ ! -f '#{profile_directory}/grml-live/build.yml' ]; then
+      echo "Missing grml-live build manifest: #{profile_directory}/grml-live/build.yml" >&2
+      exit 2
+    fi
     links=$(find '#{profile_directory}' -type l -print)
     if [ -n "$links" ]; then
       echo "Profile files must not be symbolic links:" >&2

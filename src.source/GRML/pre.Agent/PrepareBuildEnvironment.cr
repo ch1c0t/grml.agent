@@ -10,6 +10,7 @@ def prepare_build_environment(profile_name : String, progress : Proc(String, Nil
   profile_directory = "#{BUILD_PROFILE_ROOT}/#{profile_name}"
 
   report_build_profile_progress(progress, "Preparing grml-live build environment for '#{profile_name}'")
+  verify_profile_tree(profile_directory)
   packages = read_builder_packages(profile_directory)
   all_packages = (GRML_LIVE_BUILDER_PACKAGES + packages).uniq
 
@@ -70,7 +71,7 @@ def prepare_build_environment(profile_name : String, progress : Proc(String, Nil
       ensure_range("/etc/subgid")
       PY
 
-      runuser -u '#{GRML_LIVE_BUILDER}' -- unshare --map-auto true
+      runuser -u '#{GRML_LIVE_BUILDER}' -- unshare --user --map-auto --map-user=65536 --map-group=65536 --pid --mount-proc --uts --fork --kill-child --setuid 0 --setgid 0 true
       SHELL
     run_build_environment_command(command, 60.seconds, progress)
   end
@@ -79,6 +80,7 @@ def prepare_build_environment(profile_name : String, progress : Proc(String, Nil
 
   report_build_environment_stage(3, "Checking out grml-live source", progress) do
     checkout_grml_live(manifest.grml_live_ref, progress)
+    nil
   end
 
   report_build_profile_progress(progress, "grml-live build environment is ready")

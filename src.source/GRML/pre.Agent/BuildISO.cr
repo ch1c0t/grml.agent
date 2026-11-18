@@ -25,37 +25,32 @@ def build_iso(profile_name : String, progress : Proc(String, Nil)? = nil) : Stri
   report_build_profile_progress(progress, "Run ID: #{run_id}")
   report_build_profile_progress(progress, "Artifacts: #{shared_run_directory}")
 
-  prepare_build_stage(
-    profile_directory,
-    stage_directory,
-    config_directory,
-    output_directory,
-    temporary_directory,
-    install_directory,
-    shared_run_directory,
-    shared_output_directory,
-    progress
-  )
-
+  failure_exit_code = -1
   begin
+    prepare_build_stage(
+      profile_directory,
+      stage_directory,
+      config_directory,
+      output_directory,
+      temporary_directory,
+      install_directory,
+      shared_run_directory,
+      shared_output_directory,
+      progress
+    )
+
     command = grml_live_build_command(manifest, config_directory, output_directory, temporary_directory, install_directory)
     started_at = Time.instant
-    begin
-      result = @interaction.execute_streaming(command, 6.hours) do |_stream, chunk|
-        report_build_iso_output(progress, chunk)
-      end
-    rescue ex
-      preserve_partial_build_output(output_directory, profile_directory, shared_run_directory, shared_output_directory, progress)
-      mark_build_run(shared_run_directory, "FAILED", profile_name, run_id, checkout_commit, -1)
-      raise "grml-live execution raised an exception: #{ex.message}; partial logs are preserved at #{shared_output_directory}"
+    result = @interaction.execute_streaming(command, 6.hours) do |_stream, chunk|
+      report_build_iso_output(progress, chunk)
     end
+    failure_exit_code = result.exit_code
 
     preserve_build_output(output_directory, profile_directory, shared_run_directory, shared_output_directory)
     elapsed = Time.instant - started_at
 
     unless result.success?
-      mark_build_run(shared_run_directory, "FAILED", profile_name, run_id, checkout_commit, result.exit_code)
-      raise "grml-live image-create failed (exit=#{result.exit_code}, stderr=#{result.stderr.inspect}); partial logs are preserved at #{shared_output_directory}"
+      raise "grml-live image-create failed (exit=#{result.exit_code}, stderr=#{result.stderr.inspect})"
     end
 
     verify_build_iso_output(shared_output_directory)
@@ -64,6 +59,20 @@ def build_iso(profile_name : String, progress : Proc(String, Nil)? = nil) : Stri
     report_build_profile_progress(progress, "ISO files: #{shared_output_directory}/grml_isos")
     report_build_profile_progress(progress, "Build logs: #{shared_output_directory}/grml_logs")
     shared_output_directory
+  rescue ex
+    preserve_partial_build_output(output_directory, profile_directory, shared_run_directory, shared_output_directory, progress)
+    begin
+      run_exists = @interaction.execute("test -d '#{shared_run_directory}'")
+      if run_exists.success?
+        building = @interaction.execute("test -s '#{shared_run_directory}/BUILDING'")
+        if building.success?
+          mark_build_run(shared_run_directory, "FAILED", profile_name, run_id, checkout_commit, failure_exit_code)
+        end
+      end
+    rescue marker_error
+      report_build_profile_progress(progress, "WARNING: could not mark failed build: #{marker_error.message}")
+    end
+    raise ex
   ensure
     cleanup_result = @interaction.execute("rm -rf '#{stage_directory}'", 2.minutes)
     unless cleanup_result.success?
@@ -95,7 +104,7 @@ private def ensure_grml_live_checkout_for_build(ref : String, progress : Proc(St
 end
 
 private def verify_build_environment(manifest : LiveBuildManifest) : Nil
-  minimum_bytes = manifest.classes.includes?("GRML_FULL") ? 4_i64.gigabytes : 2_i64.gigabytes
+  minimum_bytes = manifest.classes.includes?("GRML_FULL") ? 4_i64 * 1024 * 1024 * 1024 : 2_i64 * 1024 * 1024 * 1024
   command = <<-SHELL
     set -eu
     test -x '#{GRML_LIVE_CHECKOUT}/grml-live'
@@ -125,7 +134,7 @@ private def verify_build_environment(manifest : LiveBuildManifest) : Nil
       exit 13
     fi
 
-    runuser -u '#{GRML_LIVE_BUILDER}' -- unshare --map-auto true
+    runuser -u '#{GRML_LIVE_BUILDER}' -- unshare --user --map-auto --map-user=65536 --map-group=65536 --pid --mount-proc --uts --fork --kill-child --setuid 0 --setgid 0 true
     SHELL
   result = @interaction.execute(command, 60.seconds)
   unless result.success?
@@ -264,7 +273,7 @@ private def preserve_build_output(
     set -eu
     mkdir -p '#{shared_output_directory}'
     if [ -d '#{output_directory}' ]; then
-      cp -a '#{output_directory}/.' '#{shared_output_directory}/'
+      cp -R --preserve=mode,timestamps --no-preserve=ownership '#{output_directory}/.' '#{shared_output_directory}/'
     fi
     cp '#{profile_directory}/grml-live/build.yml' '#{shared_run_directory}/build.yml'
     SHELL
