@@ -11,7 +11,7 @@ private def prepare_ext4_disk_image(name, size, format, progress) : String
     path = create_disk_image(name, size, format)
   end
   suffix = name == "grml-live-build" ? "live_build" : name.gsub(/[^A-Za-z0-9_-]/, "_")
-  attached = find_attached_disk_info("grml_virtio_disk_#{suffix}")
+  attached = find_named_block_node("grml_disk_#{suffix}")
   if attached
     report_storage_progress(progress, "Verifying attached image metadata through QMP")
     verify_attached_disk_image(attached, path, format, size)

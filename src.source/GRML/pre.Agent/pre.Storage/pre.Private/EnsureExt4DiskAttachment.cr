@@ -1,7 +1,7 @@
 private def ensure_ext4_disk_attachment(path, name, format, progress) : Nil
   suffix = name == "grml-live-build" ? "live_build" : name.gsub(/[^A-Za-z0-9_-]/, "_")
   device_id = "grml_virtio_disk_#{suffix}"
-  attached_path = find_attached_disk_path(device_id)
+  attached_path = find_named_block_node_path("grml_disk_#{suffix}")
   if attached_path
     unless File.expand_path(attached_path) == path
       raise "QEMU device #{device_id} is attached to another image: #{attached_path}"
