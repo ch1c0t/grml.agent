@@ -1465,7 +1465,7 @@ module GRML
           private def disk_image_virtual_size(json : String) : Int64
             JSON.parse(json).as_h["virtual-size"].as_i64
           rescue ex
-            raise "Invalid qemu-img virtual-size JSON: #{ex.message}"
+            raise "Invalid disk image virtual-size JSON: #{ex.message}"
           end
         end
       
@@ -1538,6 +1538,14 @@ module GRML
           end
         end
       
+        module ExpectedDiskImageSize
+          private def expected_disk_image_size(requested_size : String) : Int64
+            match = /\A([1-9][0-9]*)([KMGTP])?\z/i.match(requested_size)
+            raise ArgumentError.new("Invalid disk size: #{requested_size.inspect}") unless match
+            match[1].to_i64 * disk_size_multiplier(match[2]?.try(&.upcase))
+          end
+        end
+      
         module Ext4ProvisioningCommand
           private def ext4_provisioning_command(serial : String, mountpoint : String) : String
             disk = shell_quote("/dev/disk/by-id/virtio-#{serial}")
@@ -1585,24 +1593,26 @@ module GRML
           end
         end
       
-        module FindAttachedDiskPath
-          private def find_attached_disk_path(device_id : String) : String?
+        module FindAttachedDiskInfo
+          private def find_attached_disk_info(device_id : String) : JSON::Any?
             response = execute_qmp_checked("query-block", Hash(String, JSON::Any).new)
             records = response.as_h["return"]?.try(&.as_a)
             raise "QMP query-block returned no block-device list" unless records
-          
-            records.each do |record|
-              block = record.as_h
-              next unless block["device"]?.try(&.as_s) == device_id
-          
-              inserted = block["inserted"]?.try(&.as_h)
-              raise "QMP reports #{device_id} attached without backing-file details" unless inserted
-              path = inserted["file"]?.try(&.as_s)
-              raise "QMP reports #{device_id} attached without a backing-file path" unless path
-              return path
-            end
-          
-            nil
+            record = records.find { |item| item.as_h["device"]?.try(&.as_s) == device_id }
+            return unless record
+            inserted = record.as_h["inserted"]?
+            raise "QMP reports #{device_id} attached without backing-file details" unless inserted
+            inserted
+          end
+        end
+      
+        module FindAttachedDiskPath
+          private def find_attached_disk_path(device_id : String) : String?
+            inserted = find_attached_disk_info(device_id)
+            return unless inserted
+            path = inserted.as_h["file"]?.try(&.as_s)
+            raise "QMP reports #{device_id} attached without a backing-file path" unless path
+            path
           end
         end
       
@@ -1649,8 +1659,15 @@ module GRML
               report_storage_progress(progress, "Creating sparse #{size} disk image: #{path}")
               path = create_disk_image(name, size, format)
             end
-            report_storage_progress(progress, "Verifying disk image size and format")
-            verify_disk_image_size(path, format, size)
+            suffix = name == "grml-live-build" ? "live_build" : name.gsub(/[^A-Za-z0-9_-]/, "_")
+            attached = find_attached_disk_info("grml_virtio_disk_#{suffix}")
+            if attached
+              report_storage_progress(progress, "Verifying attached image metadata through QMP")
+              verify_attached_disk_image(attached, path, format, size)
+            else
+              report_storage_progress(progress, "Verifying detached disk image size and format")
+              verify_disk_image_size(path, format, size)
+            end
             path
           end
         end
@@ -1727,12 +1744,25 @@ module GRML
           end
         end
       
+        module VerifyAttachedDiskImage
+          private def verify_attached_disk_image(inserted : JSON::Any, path : String, format : String, size : String) : Nil
+            details = inserted.as_h
+            attached_path = details["file"]?.try(&.as_s)
+            raise "QMP attachment has no backing-file path" unless attached_path
+            raise "QEMU disk attachment path mismatch: #{attached_path}" unless File.expand_path(attached_path) == path
+            image = details["image"]?
+            raise "QMP attachment has no image metadata" unless image
+            actual_format = image.as_h["format"]?.try(&.as_s)
+            raise "Attached disk format mismatch: #{actual_format.inspect}, expected #{format}" unless actual_format == format
+            actual_bytes = disk_image_virtual_size(image.to_json)
+            expected_bytes = expected_disk_image_size(size)
+            raise "Attached disk is too small: #{actual_bytes} bytes, #{expected_bytes} required" if actual_bytes < expected_bytes
+          end
+        end
+      
         module VerifyDiskImageSize
           private def verify_disk_image_size(path : String, format : String, requested_size : String) : Nil
-            match = /\A([1-9][0-9]*)([KMGTP])?\z/i.match(requested_size)
-            raise ArgumentError.new("Invalid disk size: #{requested_size.inspect}") unless match
-            multiplier = disk_size_multiplier(match[2]?.try(&.upcase))
-            expected_bytes = match[1].to_i64 * multiplier
+            expected_bytes = expected_disk_image_size(requested_size)
             output, error = IO::Memory.new, IO::Memory.new
             result = Process.run("qemu-img", ["info", "--output=json", "-f", format, path], output: output, error: error)
             unless result.success?
@@ -1784,12 +1814,14 @@ module GRML
         include EnsureExt4ProvisioningCommand
         include ExecuteQMPChecked
         include Ext4ProvisioningCommand
+        include FindAttachedDiskInfo
         include FindAttachedDiskPath
         include ShellQuote
         include ValidateDiskFormat
         include ValidateDiskName
         include ValidateGuestMountpoint
         include VerifyDiskImageSize
+        include VerifyAttachedDiskImage
         include PrepareExt4DiskImage
         include EnsureExt4DiskAttachment
         include ProvisionExt4Disk
@@ -1802,6 +1834,7 @@ module GRML
         include FormatExt4Partition
         include MountExt4Partition
         include DiskSizeMultiplier
+        include ExpectedDiskImageSize
         include DiskImageVirtualSize
       end
     
