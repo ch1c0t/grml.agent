@@ -52,6 +52,9 @@ class FakeGRMLAgent
   getter deb_cache_verifications = [] of String
   getter applied_profiles = [] of String
   getter shared_directory_verifications = 0
+  getter prepared_build_profiles = [] of String
+  getter validated_build_profiles = [] of String
+  getter built_iso_profiles = [] of String
   getter created_disks = [] of Tuple(String, String, String)
   getter attached_disks = [] of Tuple(String, String)
   getter ext4_disks = [] of Tuple(String, String, String?, String)
@@ -80,6 +83,23 @@ class FakeGRMLAgent
   def apply_profile(profile_name : String, verify_cache : Bool = false, progress : Proc(String, Nil)? = nil) : Nil
     @applied_profiles << profile_name
     progress.try &.call("fake profile application progress")
+  end
+
+  def prepare_build_environment(profile_name : String, progress : Proc(String, Nil)? = nil) : Nil
+    @prepared_build_profiles << profile_name
+    progress.try &.call("fake build environment progress")
+  end
+
+  def validate_profile(profile_name : String, progress : Proc(String, Nil)? = nil) : GRML::LiveBuildManifest
+    @validated_build_profiles << profile_name
+    progress.try &.call("fake profile validation progress")
+    GRML::LiveBuildManifest.from_json(%({"classes":["GRML_SMALL","RESCUE"]}))
+  end
+
+  def build_iso(profile_name : String, progress : Proc(String, Nil)? = nil) : String
+    @built_iso_profiles << profile_name
+    progress.try &.call("fake ISO build progress")
+    "/mnt/shared/grml-live/runs/#{profile_name}/run/output"
   end
 
   def verify_deb_cache(package : String = "hello", progress : Proc(String, Nil)? = nil) : Nil
@@ -157,12 +177,15 @@ describe GRML::REPL do
     definition.command_names.should eq([
       "apply_profile",
       "attach_disk",
+      "build_iso",
       "create_disk",
       "create_ext4_disk",
       "guest_exec",
       "ocr",
       "prepare_alpine_bundle",
+      "prepare_build_environment",
       "prepare_deb_cache",
+      "validate_profile",
       "verify_deb_cache",
     ])
   end
@@ -225,6 +248,65 @@ describe GRML::REPL do
     end
 
     agent.applied_profiles.should be_empty
+  end
+
+  it "prepares a profile build environment and forwards progress" do
+    agent = FakeGRMLAgent.new
+    messages = [] of String
+    progress = ->(message : String) { messages << message; nil }
+
+    result = GRML::REPL.prepare_build_environment(agent, ["rescue"], progress)
+
+    result.should contain("rescue")
+    agent.shared_directory_verifications.should eq(1)
+    agent.prepared_build_profiles.should eq(["rescue"])
+    messages.should eq(["fake build environment progress"])
+  end
+
+  it "validates a build profile and returns its suite and classes" do
+    agent = FakeGRMLAgent.new
+    messages = [] of String
+    progress = ->(message : String) { messages << message; nil }
+
+    result = GRML::REPL.validate_profile(agent, ["rescue"], progress)
+
+    result.should contain("trixie")
+    result.should contain("GRML_SMALL,RESCUE")
+    agent.shared_directory_verifications.should eq(1)
+    agent.validated_build_profiles.should eq(["rescue"])
+    messages.should eq(["fake profile validation progress"])
+  end
+
+  it "builds an ISO and returns its shared artifact directory" do
+    agent = FakeGRMLAgent.new
+    messages = [] of String
+    progress = ->(message : String) { messages << message; nil }
+
+    result = GRML::REPL.build_iso(agent, ["rescue"], progress)
+
+    result.should contain("/mnt/shared/grml-live/runs/rescue/")
+    agent.shared_directory_verifications.should eq(1)
+    agent.built_iso_profiles.should eq(["rescue"])
+    messages.should eq(["fake ISO build progress"])
+  end
+
+  it "rejects invalid arguments for build profile commands" do
+    agent = FakeGRMLAgent.new
+
+    expect_raises(ArgumentError, "Usage: prepare_build_environment PROFILE_NAME") do
+      GRML::REPL.prepare_build_environment(agent, [] of String)
+    end
+    expect_raises(ArgumentError, "Usage: validate_profile PROFILE_NAME") do
+      GRML::REPL.validate_profile(agent, ["rescue", "extra"])
+    end
+    expect_raises(ArgumentError, "Invalid profile name") do
+      GRML::REPL.build_iso(agent, ["../rescue"])
+    end
+
+    agent.shared_directory_verifications.should eq(0)
+    agent.prepared_build_profiles.should be_empty
+    agent.validated_build_profiles.should be_empty
+    agent.built_iso_profiles.should be_empty
   end
 
   it "accepts one safe package name for cache verification" do
