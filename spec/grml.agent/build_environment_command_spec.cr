@@ -22,8 +22,8 @@ end
 describe "grml-live preparation diagnostics" do
   it "preserves streamed stderr when the command result has empty buffers" do
     error = expect_raises(Exception) { GRMLBuildCommandHarness.new(GRMLBuildCommandFakeInteraction.new).run }
-    error.message.should contain("syntax error")
-    error.message.should contain("builder-account.log")
+    error.to_s.should contain("syntax error")
+    error.to_s.should contain("builder-account.log")
   end
   it "generates syntactically valid Python without a nested here-document" do
     script = GRMLBuildCommandHarness.new(GRMLBuildCommandFakeInteraction.new).python_script
