@@ -1,3 +1,5 @@
+require "json"
+require "set"
 require "qemu"
 require "tmux_repl"
 
@@ -155,6 +157,390 @@ module GRML
         end
         Log.info { "GRML console font size set to 12x24" }
       end
+    end
+  
+    module BuildISO
+      module Private
+        module DirectoryExistsInGuest
+          private def directory_exists_in_guest?(path : String) : Bool
+            result = @interaction.execute("test -d '#{path}'")
+            result.success?
+          end
+        end
+      
+        module EnsureGrmlLiveCheckoutForBuild
+          private def ensure_grml_live_checkout_for_build(ref : String, progress : Proc(String, Nil)?) : String
+            command = <<-SHELL
+              set -eu
+              if [ ! -x '#{::GRML::Agent::PrepareBuildEnvironment::GRML_LIVE_CHECKOUT}/grml-live' ]; then
+                echo "grml-live is not installed; run prepare_build_environment PROFILE_NAME first" >&2
+                exit 10
+              fi
+              git -C '#{::GRML::Agent::PrepareBuildEnvironment::GRML_LIVE_CHECKOUT}' fetch --force --depth=1 origin '#{ref}'
+              git -C '#{::GRML::Agent::PrepareBuildEnvironment::GRML_LIVE_CHECKOUT}' checkout --force --detach FETCH_HEAD
+              git -C '#{::GRML::Agent::PrepareBuildEnvironment::GRML_LIVE_CHECKOUT}' clean -fdx
+              git -C '#{::GRML::Agent::PrepareBuildEnvironment::GRML_LIVE_CHECKOUT}' rev-parse HEAD
+              SHELL
+          
+            result = @interaction.execute_streaming(command, 10.minutes) do |_stream, chunk|
+              report_build_environment_output(progress, chunk)
+            end
+            unless result.success?
+              raise "Could not select grml-live ref '#{ref}' (exit=#{result.exit_code}, stderr=#{result.stderr.inspect})"
+            end
+            result.stdout.lines.last?.try(&.strip) || raise "Could not determine grml-live checkout commit"
+          end
+        end
+      
+        module GrmlLiveBuildCommand
+          private def grml_live_build_command(
+            manifest : LiveBuildManifest,
+            config_directory : String,
+            output_directory : String,
+            temporary_directory : String,
+            install_directory : String
+          ) : String
+            args = [
+              shell_quote("#{::GRML::Agent::PrepareBuildEnvironment::GRML_LIVE_CHECKOUT}/grml-live"),
+              "image-create",
+              "-F",
+              "-D", shell_quote(config_directory),
+              "-s", shell_quote(manifest.suite),
+              "-c", shell_quote(manifest.classes_argument),
+              "--hostname", shell_quote(manifest.hostname),
+              "--username", shell_quote(manifest.username),
+              "--distri-name", shell_quote(manifest.distri_name),
+              "--distri-info", shell_quote(manifest.distri_info),
+              "-g", shell_quote(manifest.grml_name),
+              "-r", shell_quote(manifest.release_name),
+              "-v", shell_quote(manifest.version),
+              "--bootstrap-mirror-url", shell_quote(manifest.bootstrap_mirror_url),
+            ]
+          
+            unless manifest.boot_options.empty?
+              args << "--boot-options" << shell_quote(manifest.boot_options.join(" "))
+            end
+            args << "--secure-boot" if manifest.secure_boot
+            args << "-R" unless manifest.release
+            if iso_name = manifest.iso_name
+              args << "-i" << shell_quote(iso_name)
+            end
+            if build_date = manifest.date
+              args << "-d" << shell_quote(build_date)
+            end
+            if wayback_date = manifest.wayback_date
+              args << "-w" << shell_quote(wayback_date)
+            end
+            args << "-I" << shell_quote(install_directory) if directory_exists_in_guest?(install_directory)
+            args << shell_quote(output_directory)
+          
+            environment = [
+              "TMPDIR=#{shell_quote(temporary_directory)}",
+              "APT_PROXY='http://127.0.0.1:3142'",
+            ]
+            if epoch = manifest.source_date_epoch
+              environment << "SOURCE_DATE_EPOCH=#{epoch}"
+            end
+          
+            "set -eu; runuser -u '#{::GRML::Agent::PrepareBuildEnvironment::GRML_LIVE_BUILDER}' -- env #{environment.join(" ")} #{args.join(" ")}"
+          end
+        end
+      
+        module MarkBuildRun
+          private def mark_build_run(
+            shared_run_directory : String,
+            state : String,
+            profile_name : String,
+            run_id : String,
+            checkout_commit : String,
+            exit_code : Int32
+          ) : Nil
+            command = <<-SHELL
+              set -eu
+              printf 'run_id=%s\\nprofile=%s\\nstatus=%s\\ngrml_live_commit=%s\\nexit_code=%s\\n' \
+                '#{run_id}' '#{profile_name}' '#{state}' '#{checkout_commit}' '#{exit_code}' > '#{shared_run_directory}/#{state}'
+              rm -f '#{shared_run_directory}/BUILDING'
+              SHELL
+            result = @interaction.execute(command)
+            unless result.success?
+              raise "Could not write grml-live build status '#{state}' (exit=#{result.exit_code}, stderr=#{result.stderr.inspect})"
+            end
+          end
+        end
+      
+        module PrepareBuildStage
+          private def prepare_build_stage(
+            profile_directory : String,
+            stage_directory : String,
+            config_directory : String,
+            output_directory : String,
+            temporary_directory : String,
+            install_directory : String,
+            shared_run_directory : String,
+            shared_output_directory : String,
+            progress : Proc(String, Nil)?
+          ) : Nil
+            profile_config = "#{profile_directory}/grml-live/config"
+            profile_install = "#{profile_directory}/grml-live/chroot-install"
+            command = <<-SHELL
+              set -eu
+              checkout='#{::GRML::Agent::PrepareBuildEnvironment::GRML_LIVE_CHECKOUT}'
+              profile_config='#{profile_config}'
+              profile_install='#{profile_install}'
+              stage='#{stage_directory}'
+              config='#{config_directory}'
+              output='#{output_directory}'
+              tmp='#{temporary_directory}'
+              install='#{install_directory}'
+              run='#{shared_run_directory}'
+              shared_output='#{shared_output_directory}'
+          
+              mkdir -p '#{::GRML::Agent::PrepareBuildEnvironment::GRML_LIVE_BUILD_STAGE_ROOT}' "$stage" "$config" "$output" "$tmp" "$run" "$shared_output"
+              chmod 0755 '#{::GRML::Agent::PrepareBuildEnvironment::GRML_LIVE_BUILD_STAGE_ROOT}' "$stage" "$config" "$output" "$tmp"
+              cp -a "$checkout/config/." "$config/"
+              if [ -d "$profile_config" ]; then
+                cp -a "$profile_config/." "$config/"
+              fi
+              if [ -d "$profile_install" ]; then
+                mkdir -p "$install"
+                cp -a "$profile_install/." "$install/"
+                find "$install" -type d -exec chmod 0755 {} +
+                find "$install" -type f -exec chmod a+r {} +
+              fi
+          
+              find "$config" -type d -exec chmod 0755 {} +
+              find "$config" -type f -exec chmod a+r {} +
+              chown -R '#{::GRML::Agent::PrepareBuildEnvironment::GRML_LIVE_BUILDER}:#{::GRML::Agent::PrepareBuildEnvironment::GRML_LIVE_BUILDER}' "$stage"
+          
+              cp '#{profile_directory}/grml-live/build.yml' "$run/build.yml"
+              printf 'run_id=%s\\nprofile=%s\\nstatus=BUILDING\\n' \
+                '#{File.basename(stage_directory)}' '#{File.basename(profile_directory)}' > "$run/BUILDING"
+              SHELL
+          
+            result = @interaction.execute(command, 5.minutes)
+            unless result.success?
+              raise "Could not stage grml-live profile (exit=#{result.exit_code}, stderr=#{result.stderr.inspect})"
+            end
+            report_build_profile_progress(progress, "Merged upstream grml-live configuration with profile overrides")
+          end
+        end
+      
+        module PreserveBuildOutput
+          private def preserve_build_output(
+            output_directory : String,
+            profile_directory : String,
+            shared_run_directory : String,
+            shared_output_directory : String
+          ) : Nil
+            command = <<-SHELL
+              set -eu
+              mkdir -p '#{shared_output_directory}'
+              if [ -d '#{output_directory}' ]; then
+                cp -R --preserve=mode,timestamps --no-preserve=ownership '#{output_directory}/.' '#{shared_output_directory}/'
+              fi
+              cp '#{profile_directory}/grml-live/build.yml' '#{shared_run_directory}/build.yml'
+              SHELL
+            result = @interaction.execute(command, 10.minutes)
+            unless result.success?
+              raise "Could not preserve grml-live build output (exit=#{result.exit_code}, stderr=#{result.stderr.inspect})"
+            end
+          end
+        end
+      
+        module PreservePartialBuildOutput
+          private def preserve_partial_build_output(
+            output_directory : String,
+            profile_directory : String,
+            shared_run_directory : String,
+            shared_output_directory : String,
+            progress : Proc(String, Nil)?
+          ) : Nil
+            preserve_build_output(output_directory, profile_directory, shared_run_directory, shared_output_directory)
+          rescue ex
+            report_build_profile_progress(progress, "WARNING: could not preserve partial build output: #{ex.message}")
+          end
+        end
+      
+        module ReportBuildISOOutput
+          private def report_build_iso_output(progress : Proc(String, Nil)?, chunk : String) : Nil
+            return if chunk.empty?
+            if callback = progress
+              callback.call(chunk)
+            else
+              Log.info { chunk }
+            end
+          end
+        end
+      
+        module VerifyBuildEnvironment
+          private def verify_build_environment(manifest : LiveBuildManifest) : Nil
+            workspace = ::GRML::Agent::PrepareBuildEnvironment::GRML_LIVE_BUILD_WORKSPACE
+            minimum_bytes = manifest.classes.includes?("GRML_FULL") ? 4_i64 * 1024 * 1024 * 1024 : 2_i64 * 1024 * 1024 * 1024
+            command = <<-SHELL
+              set -eu
+              test -x '#{::GRML::Agent::PrepareBuildEnvironment::GRML_LIVE_CHECKOUT}/grml-live'
+              id '#{::GRML::Agent::PrepareBuildEnvironment::GRML_LIVE_BUILDER}' >/dev/null
+              grep -q '^#{::GRML::Agent::PrepareBuildEnvironment::GRML_LIVE_BUILDER}:' /etc/subuid
+              grep -q '^#{::GRML::Agent::PrepareBuildEnvironment::GRML_LIVE_BUILDER}:' /etc/subgid
+              for program in dpkg mksquashfs mmdebstrap xorriso runuser unshare newuidmap newgidmap findmnt mountpoint blkid; do
+                command -v "$program" >/dev/null || {
+                  echo "Required build program is missing: $program" >&2
+                  exit 11
+                }
+              done
+          
+              mountpoint -q '#{workspace}' || {
+                echo "Build workspace is not mounted: #{workspace}" >&2
+                exit 12
+              }
+          
+              filesystem=$(findmnt -n -o FSTYPE --target '#{workspace}')
+              if [ "$filesystem" != ext4 ]; then
+                echo "Build workspace must be ext4, found: $filesystem" >&2
+                exit 13
+              fi
+          
+              mount_target=$(findmnt -n -o TARGET --target '#{workspace}')
+              if [ "$mount_target" != '#{workspace}' ]; then
+                echo "Build workspace is not a dedicated mount point: $mount_target" >&2
+                exit 14
+              fi
+          
+              mount_options=$(findmnt -n -o OPTIONS --target '#{workspace}')
+              for option in nodev noexec nosuid; do
+                case ",$mount_options," in
+                  *",$option,"*)
+                    echo "Build workspace is mounted with $option; grml-live requires an executable, device-capable filesystem" >&2
+                    exit 15
+                    ;;
+                esac
+              done
+          
+              free_bytes=$(df -PB1 '#{workspace}' | awk 'NR == 2 {print $4}')
+              if [ "$free_bytes" -lt #{minimum_bytes} ]; then
+                echo "Insufficient free space in #{workspace}: $free_bytes bytes available, #{minimum_bytes} required" >&2
+                exit 16
+              fi
+          
+              runuser -u '#{::GRML::Agent::PrepareBuildEnvironment::GRML_LIVE_BUILDER}' -- unshare --user --map-auto --map-user=65536 --map-group=65536 --pid --mount-proc --uts --fork --kill-child --setuid 0 --setgid 0 true
+              SHELL
+            result = @interaction.execute(command, 60.seconds)
+            unless result.success?
+              raise "grml-live build environment is not ready; run prepare_build_environment PROFILE_NAME (exit=#{result.exit_code}, stderr=#{result.stderr.inspect})"
+            end
+          end
+        end
+      
+        module VerifyBuildISOOutput
+          private def verify_build_iso_output(shared_output_directory : String) : Nil
+            command = "find '#{shared_output_directory}/grml_isos' -maxdepth 1 -type f -name '*.iso' -print -quit | grep -q ."
+            result = @interaction.execute(command)
+            unless result.success?
+              raise "grml-live returned success but no ISO file was found in #{shared_output_directory}/grml_isos"
+            end
+          end
+        end
+      
+        include DirectoryExistsInGuest
+        include EnsureGrmlLiveCheckoutForBuild
+        include GrmlLiveBuildCommand
+        include MarkBuildRun
+        include PrepareBuildStage
+        include PreserveBuildOutput
+        include PreservePartialBuildOutput
+        include ReportBuildISOOutput
+        include VerifyBuildEnvironment
+        include VerifyBuildISOOutput
+      end
+    
+      module Public
+        module BuildISO
+          def build_iso(profile_name : String, progress : Proc(String, Nil)? = nil) : String
+            validate_build_profile_name(profile_name)
+            manifest = validate_profile(profile_name, progress)
+            checkout_commit = ensure_grml_live_checkout_for_build(manifest.grml_live_ref, progress)
+            verify_build_environment(manifest)
+          
+            timestamp = Time.utc.to_s("%Y%m%dT%H%M%SZ")
+            nonce = Random.rand(0_i64..Int64::MAX).to_s(16)
+            run_id = "#{timestamp}-#{nonce}"
+            profile_directory = "#{BUILD_PROFILE_ROOT}/#{profile_name}"
+            stage_directory = "#{::GRML::Agent::PrepareBuildEnvironment::GRML_LIVE_BUILD_STAGE_ROOT}/#{run_id}"
+            config_directory = "#{stage_directory}/config"
+            output_directory = "#{stage_directory}/output"
+            temporary_directory = "#{stage_directory}/tmp"
+            install_directory = "#{stage_directory}/chroot-install"
+            shared_run_directory = "#{::GRML::Agent::PrepareBuildEnvironment::GRML_LIVE_BUILD_RUN_ROOT}/#{profile_name}/#{run_id}"
+            shared_output_directory = "#{shared_run_directory}/output"
+          
+            report_build_profile_progress(progress, "Starting grml-live image-create")
+            report_build_profile_progress(progress, "Profile: #{profile_name}")
+            report_build_profile_progress(progress, "grml-live commit: #{checkout_commit}")
+            report_build_profile_progress(progress, "Run ID: #{run_id}")
+            report_build_profile_progress(progress, "Artifacts: #{shared_run_directory}")
+          
+            failure_exit_code = -1
+            begin
+              prepare_build_stage(
+                profile_directory,
+                stage_directory,
+                config_directory,
+                output_directory,
+                temporary_directory,
+                install_directory,
+                shared_run_directory,
+                shared_output_directory,
+                progress
+              )
+          
+              command = grml_live_build_command(manifest, config_directory, output_directory, temporary_directory, install_directory)
+              started_at = Time.instant
+              result = @interaction.execute_streaming(command, 6.hours) do |_stream, chunk|
+                report_build_iso_output(progress, chunk)
+              end
+              failure_exit_code = result.exit_code
+          
+              preserve_build_output(output_directory, profile_directory, shared_run_directory, shared_output_directory)
+              elapsed = Time.instant - started_at
+          
+              unless result.success?
+                raise "grml-live image-create failed (exit=#{result.exit_code}, stderr=#{result.stderr.inspect})"
+              end
+          
+              verify_build_iso_output(shared_output_directory)
+              mark_build_run(shared_run_directory, "COMPLETE", profile_name, run_id, checkout_commit, result.exit_code)
+              report_build_profile_progress(progress, "grml-live image-create completed in #{elapsed.total_seconds.round(1)}s")
+              report_build_profile_progress(progress, "ISO files: #{shared_output_directory}/grml_isos")
+              report_build_profile_progress(progress, "Build logs: #{shared_output_directory}/grml_logs")
+              shared_output_directory
+            rescue ex
+              preserve_partial_build_output(output_directory, profile_directory, shared_run_directory, shared_output_directory, progress)
+              begin
+                run_exists = @interaction.execute("test -d '#{shared_run_directory}'")
+                if run_exists.success?
+                  building = @interaction.execute("test -s '#{shared_run_directory}/BUILDING'")
+                  if building.success?
+                    mark_build_run(shared_run_directory, "FAILED", profile_name, run_id, checkout_commit, failure_exit_code)
+                  end
+                end
+              rescue marker_error
+                report_build_profile_progress(progress, "WARNING: could not mark failed build: #{marker_error.message}")
+              end
+              raise ex
+            ensure
+              cleanup_result = @interaction.execute("rm -rf '#{stage_directory}'", 2.minutes)
+              unless cleanup_result.success?
+                report_build_profile_progress(progress, "WARNING: could not remove temporary build directory #{stage_directory}")
+              end
+            end
+          end
+        end
+      
+        include BuildISO
+      end
+    
+      include Public
+      include Private
     end
   
     module PrepareAlpineBundle
@@ -410,6 +796,262 @@ module GRML
       end
     end
   
+    module PrepareBuildEnvironment
+      module Private
+        module BuildBuilderAccountCommand
+          private def build_builder_account_command : String
+            <<-SHELL
+              set -eu
+              echo "[account] Ensuring #{GRML_LIVE_BUILDER} exists"
+              id '#{GRML_LIVE_BUILDER}' >/dev/null 2>&1 ||
+                useradd --create-home --user-group --shell /bin/bash '#{GRML_LIVE_BUILDER}'
+              echo "[account] Ensuring subordinate UID/GID ranges"
+              #{build_subordinate_id_command}
+              echo "[account] Testing user namespace mappings"
+              runuser -u '#{GRML_LIVE_BUILDER}' -- unshare --user --map-auto --map-user=65536 --map-group=65536 --pid --mount-proc --uts --fork --kill-child --setuid 0 --setgid 0 true
+              echo "[account] User namespace mappings are usable"
+            SHELL
+          end
+        end
+      
+        module BuildDependenciesCommand
+          private def build_dependencies_command(packages : Array(String)) : String
+            <<-SHELL
+              set -eu
+              echo "[apt] Updating package indexes"
+              apt-get update
+              echo "[apt] Installing #{packages.size} packages"
+              DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends #{packages.join(" ")}
+              echo "[apt] Build dependencies are installed"
+            SHELL
+          end
+        end
+      
+        module BuildSubordinateIDCommand
+          private def build_subordinate_id_command : String
+            <<-PYTHON
+              python3 - <<'PY'
+              from pathlib import Path
+              username, count = "#{GRML_LIVE_BUILDER}", 65536
+          
+              def ensure_range(filename):
+                  path = Path(filename)
+                  path.touch(exist_ok=True)
+                  entries = []
+                  for line in path.read_text(encoding="utf-8").splitlines():
+                      fields = line.split(":")
+                      if len(fields) == 3:
+                          try:
+                              entries.append((fields[0], int(fields[1]), int(fields[2])))
+                          except ValueError:
+                              pass
+                  if any(name == username and size >= count for name, _, size in entries):
+                      return
+                  start = 100000
+                  while True:
+                      ends = [first + size for _, first, size in entries
+                              if start < first + size and start + count > first]
+                      if not ends:
+                          break
+                      start = max(ends)
+                  with path.open("a", encoding="utf-8") as stream:
+                      stream.write(f"{username}:{start}:{count}\\n")
+          
+              ensure_range("/etc/subuid")
+              ensure_range("/etc/subgid")
+              PY
+            PYTHON
+          end
+        end
+      
+        module CheckoutGrmlLive
+          private def checkout_grml_live(ref : String, progress : Proc(String, Nil)? = nil) : String
+            report_build_environment_stage(6, "Checking out grml-live source", progress) do
+              checkout_grml_live_ref(ref, progress)
+            end
+          end
+        end
+      
+        module CheckoutGrmlLiveCommand
+          private def checkout_grml_live_command(ref : String) : String
+            <<-SHELL
+              set -eu
+              if [ ! -d '#{GRML_LIVE_CHECKOUT}/.git' ]; then
+                echo "[git] Cloning grml-live repository"
+                rm -rf '#{GRML_LIVE_CHECKOUT}'
+                git clone --filter=blob:none --no-checkout https://github.com/grml/grml-live.git '#{GRML_LIVE_CHECKOUT}'
+              fi
+              echo "[git] Fetching ref: #{ref}"
+              git -C '#{GRML_LIVE_CHECKOUT}' fetch --progress --force --depth=1 origin '#{ref}'
+              echo "[git] Checking out fetched commit"
+              git -C '#{GRML_LIVE_CHECKOUT}' checkout --force --detach FETCH_HEAD
+              git -C '#{GRML_LIVE_CHECKOUT}' clean -fdx
+              git -C '#{GRML_LIVE_CHECKOUT}' rev-parse HEAD
+            SHELL
+          end
+        end
+      
+        module CheckoutGrmlLiveRef
+          private def checkout_grml_live_ref(ref : String, progress : Proc(String, Nil)?) : String
+            unless ref.matches?(/\A[A-Za-z0-9][A-Za-z0-9._\/-]*\z/) && !ref.split('/').includes?("..")
+              raise ArgumentError.new("Invalid grml-live git ref: #{ref.inspect}")
+            end
+            result = @interaction.execute_streaming(checkout_grml_live_command(ref), 10.minutes) do |_stream, chunk|
+              report_build_environment_output(progress, chunk)
+            end
+            unless result.success?
+              raise "Could not check out grml-live ref '#{ref}' (exit=#{result.exit_code}, stderr=#{result.stderr.inspect})"
+            end
+            result.stdout.lines.last?.try(&.strip) || raise "Could not determine grml-live checkout commit"
+          end
+        end
+      
+        module EnsureBuildWorkspace
+          private def ensure_build_workspace(progress : Proc(String, Nil)?) : Nil
+            report_build_environment_stage(5, "Provisioning persistent ext4 build workspace", progress) do
+              disk = ensure_ext4_disk(
+                GRML_LIVE_BUILD_DISK_NAME, GRML_LIVE_BUILD_DISK_SIZE,
+                GRML_LIVE_BUILD_WORKSPACE, "qcow2", progress
+              )
+              report_build_profile_progress(progress, "Persistent build workspace: #{disk}")
+            end
+          end
+        end
+      
+        module PrepareBuildBuilderAccount
+          private def prepare_build_builder_account(progress : Proc(String, Nil)?) : Nil
+            report_build_environment_stage(4, "Preparing unprivileged builder account and UID/GID mappings", progress) do
+              run_build_environment_command(build_builder_account_command, 60.seconds, progress)
+            end
+          end
+        end
+      
+        module PrepareBuildCache
+          private def prepare_build_cache(progress) : Nil
+            report_build_environment_stage(2, "Preparing shared Debian package cache", progress) do
+              prepare_deb_cache(progress)
+            end
+          end
+        end
+      
+        module PrepareBuildDependencies
+          private def prepare_build_dependencies(packages : Array(String), progress) : Nil
+            all_packages = (GRML_LIVE_BUILDER_PACKAGES + packages).uniq
+            report_build_environment_stage(3, "Installing grml-live build dependencies", progress) do
+              report_build_profile_progress(progress, "Builder packages: #{all_packages.size}")
+              run_build_environment_command(build_dependencies_command(all_packages), 45.minutes, progress)
+            end
+          end
+        end
+      
+        module PrepareBuildProfile
+          private def prepare_build_profile(profile_name, progress)
+            report_build_environment_stage(1, "Validating build profile", progress) do
+              directory = "#{BUILD_PROFILE_ROOT}/#{profile_name}"
+              verify_profile_tree(directory)
+              packages = read_builder_packages(directory)
+              manifest = validate_profile(profile_name, progress)
+              {manifest: manifest, packages: packages}
+            end
+          end
+        end
+      
+        module ReportBuildEnvironmentOutput
+          private def report_build_environment_output(progress : Proc(String, Nil)?, chunk : String) : Nil
+            return if chunk.empty?
+            if callback = progress
+              callback.call(chunk)
+            else
+              Log.info { chunk }
+            end
+          end
+        end
+      
+        module ReportBuildEnvironmentStage
+          private def report_build_environment_stage(
+            index : Int32, title : String, progress : Proc(String, Nil)?, &block : -> T
+          ) : T forall T
+            label = "[#{index}/6] #{title}"
+            started_at = Time.instant
+            report_build_profile_progress(progress, "#{label} ...")
+            begin
+              result = yield
+            rescue ex
+              elapsed = Time.instant - started_at
+              report_build_profile_progress(progress, "#{label} FAILED (#{elapsed.total_seconds.round(1)}s)")
+              raise "Failed during #{title}: #{ex.message}"
+            end
+            elapsed = Time.instant - started_at
+            report_build_profile_progress(progress, "#{label} done (#{elapsed.total_seconds.round(1)}s)")
+            result
+          end
+        end
+      
+        module RunBuildEnvironmentCommand
+          private def run_build_environment_command(
+            command : String,
+            timeout : Time::Span,
+            progress : Proc(String, Nil)?
+          ) : Nil
+            result = @interaction.execute_streaming(command, timeout) do |_stream, chunk|
+              report_build_environment_output(progress, chunk)
+            end
+            unless result.success?
+              raise "Build environment command failed (exit=#{result.exit_code}):\n#{result.stderr}\n#{result.stdout}"
+            end
+          end
+        end
+      
+        include CheckoutGrmlLive
+        include CheckoutGrmlLiveRef
+        include CheckoutGrmlLiveCommand
+        include EnsureBuildWorkspace
+        include ReportBuildEnvironmentOutput
+        include ReportBuildEnvironmentStage
+        include RunBuildEnvironmentCommand
+        include PrepareBuildProfile
+        include PrepareBuildCache
+        include PrepareBuildDependencies
+        include BuildDependenciesCommand
+        include PrepareBuildBuilderAccount
+        include BuildBuilderAccountCommand
+        include BuildSubordinateIDCommand
+      end
+    
+      module Public
+        module PrepareBuildEnvironment
+          def prepare_build_environment(profile_name : String, progress : Proc(String, Nil)? = nil) : Nil
+            validate_build_profile_name(profile_name)
+            report_build_profile_progress(progress, "Preparing grml-live build environment for '#{profile_name}'")
+            profile = prepare_build_profile(profile_name, progress)
+            prepare_build_cache(progress)
+            prepare_build_dependencies(profile[:packages], progress)
+            prepare_build_builder_account(progress)
+            ensure_build_workspace(progress)
+            checkout_grml_live(profile[:manifest].grml_live_ref, progress)
+            report_build_profile_progress(progress, "grml-live build environment is ready")
+          end
+        end
+      
+        include PrepareBuildEnvironment
+      end
+    
+      GRML_LIVE_CHECKOUT = "/opt/grml-live"
+      GRML_LIVE_BUILDER = "grml-live-builder"
+      GRML_LIVE_BUILD_DISK_NAME = "grml-live-build"
+      GRML_LIVE_BUILD_DISK_SIZE = "32G"
+      GRML_LIVE_BUILD_WORKSPACE = "/mnt/grml-live-build"
+      GRML_LIVE_BUILD_STAGE_ROOT = GRML_LIVE_BUILD_WORKSPACE + "/stage"
+      GRML_LIVE_BUILD_RUN_ROOT = "/mnt/shared/grml-live/runs"
+      GRML_LIVE_BUILDER_PACKAGES = %w(
+        ca-certificates curl dosfstools e2fsprogs git jo mmdebstrap moreutils mtools
+        python3 python3-yaml rsync socat squashfs-tools uidmap util-linux xorriso
+      )
+      
+      include Public
+      include Private
+    end
+  
     module PrepareDebCache
       DEB_CACHE_DIRECTORY = "/mnt/shared/deb-cache"
       DEB_CACHE_PROXY_URL = "http://127.0.0.1:3142"
@@ -656,154 +1298,455 @@ module GRML
   
     module Storage
       module Private
-        private def validate_disk_name(name : String) : Nil
-          unless name.matches?(DISK_NAME_PATTERN)
-            raise ArgumentError.new("Invalid disk name: #{name.inspect}")
-          end
-        end
-        
-        private def create_disk_image(name : String, size : String, format : String) : String
-          validate_disk_name(name)
-        
-          unless size.matches?(DISK_SIZE_PATTERN)
-            raise ArgumentError.new("Invalid disk size: #{size.inspect}; use e.g. 10G")
-          end
-          validate_disk_format(format)
-        
-          directory = File.expand_path("./disks")
-          Dir.mkdir_p(directory)
-          path = File.join(directory, "#{name}.#{format}")
-          raise "Disk already exists: #{path}" if File.exists?(path)
-        
-          output = IO::Memory.new
-          error = IO::Memory.new
-          result = Process.run("qemu-img", ["create", "-f", format, path, size], output: output, error: error)
-          unless result.success?
-            raise "qemu-img failed (#{result.exit_code}): #{error.to_s.strip}"
-          end
-        
-          path
-        end
-        
-        private def attach_disk_with_serial(
-          path : String,
-          format : String
-        ) : NamedTuple(device_id: String, serial: String)
-          validate_disk_format(format)
-          expanded_path = File.expand_path(path)
-          raise "Disk image does not exist: #{expanded_path}" unless File.file?(expanded_path)
-        
-          suffix = Random.rand(1..Int32::MAX)
-          file_node = "grml_disk_file_#{suffix}"
-          disk_node = "grml_disk_#{suffix}"
-          device_id = "grml_virtio_disk_#{suffix}"
-          serial = "grml-#{suffix}"
-        
-          file_arguments = JSON.parse({
-            "driver" => "file",
-            "filename" => expanded_path,
-            "node-name" => file_node,
-            "auto-read-only" => true
-          }.to_json).as_h
-          format_arguments = JSON.parse({
-            "driver" => format,
-            "file" => file_node,
-            "node-name" => disk_node
-          }.to_json).as_h
-        
-          execute_qmp_checked("blockdev-add", file_arguments)
-          begin
-            execute_qmp_checked("blockdev-add", format_arguments)
-            execute_qmp_checked("device_add", JSON.parse({
-              "driver" => "virtio-blk-pci",
-              "drive" => disk_node,
-              "id" => device_id,
-              "serial" => serial
-            }.to_json).as_h)
-          rescue ex
-            begin
-              execute_qmp_checked("blockdev-del", {"node-name" => JSON::Any.new(disk_node)})
-            rescue
+        module AttachDiskWithSerial
+          private def attach_disk_with_serial(
+            path : String,
+            format : String,
+            suffix : String? = nil,
+            serial : String? = nil
+          ) : NamedTuple(device_id: String, serial: String)
+            validate_disk_format(format)
+            expanded_path = File.expand_path(path)
+            raise "Disk image does not exist: #{expanded_path}" unless File.file?(expanded_path)
+          
+            identifier = suffix || Random.rand(1..Int32::MAX).to_s
+            unless identifier.matches?(/\A[A-Za-z0-9_-]+\z/)
+              raise ArgumentError.new("Invalid QEMU disk identifier: #{identifier.inspect}")
             end
-            begin
-              execute_qmp_checked("blockdev-del", {"node-name" => JSON::Any.new(file_node)})
-            rescue
+            device_serial = serial || "grml-#{identifier}"
+            unless device_serial.matches?(/\A[A-Za-z0-9._-]{1,20}\z/)
+              raise ArgumentError.new("Invalid QEMU disk serial: #{device_serial.inspect}")
             end
-            raise ex
-          end
-        
-          {device_id: device_id, serial: serial}
-        end
-        
-        private def validate_guest_mountpoint(path : String) : String
-          unless path.starts_with?("/") && path != "/" && !path.split("/").any? { |part| part == "." || part == ".." }
-            raise ArgumentError.new("Mount point must be an absolute guest path without '.' or '..' components: #{path.inspect}")
-          end
-          path
-        end
-        
-        private def ext4_provisioning_command(serial : String, mountpoint : String) : String
-          disk = shell_quote("/dev/disk/by-id/virtio-#{serial}")
-          target = shell_quote(mountpoint)
-        
-          <<-SCRIPT
-            set -eu
-            disk=#{disk}
-            partition="$disk-part1"
-            mountpoint=#{target}
-        
-            for attempt in $(seq 1 50); do
-              [ -b "$disk" ] && break
-              sleep 0.1
-            done
-            if [ ! -b "$disk" ]; then
-              echo "Guest block device did not appear: $disk" >&2
-              exit 1
-            fi
-        
-            if mountpoint -q "$mountpoint"; then
-              echo "Guest mount point is already in use: $mountpoint" >&2
-              exit 1
-            fi
-        
-            printf 'label: gpt\\n, , L\\n' | sfdisk "$disk"
-            blockdev --rereadpt "$disk"
-            udevadm settle
-        
-            for attempt in $(seq 1 50); do
-              [ -b "$partition" ] && break
-              sleep 0.1
-            done
-            if [ ! -b "$partition" ]; then
-              echo "Guest partition did not appear: $partition" >&2
-              exit 1
-            fi
-        
-            mkfs.ext4 -F "$partition"
-            mkdir -p "$mountpoint"
-            mount -t ext4 "$partition" "$mountpoint"
-            findmnt -rn -t ext4 --target "$mountpoint" >/dev/null
-            printf 'Mounted %s on %s as ext4\\n' "$partition" "$mountpoint"
-          SCRIPT
-        end
-        
-        private def shell_quote(value : String) : String
-          "'" + value.gsub("'", "'\\''") + "'"
-        end
-        
-        private def validate_disk_format(format : String) : Nil
-          unless DISK_FORMATS.includes?(format)
-            raise ArgumentError.new("Unsupported disk format #{format.inspect}; choose qcow2 or raw")
+          
+            file_node = "grml_disk_file_#{identifier}"
+            disk_node = "grml_disk_#{identifier}"
+            device_id = "grml_virtio_disk_#{identifier}"
+          
+            file_arguments = JSON.parse({
+              "driver" => "file",
+              "filename" => expanded_path,
+              "node-name" => file_node,
+              "auto-read-only" => true
+            }.to_json).as_h
+            format_arguments = JSON.parse({
+              "driver" => format,
+              "file" => file_node,
+              "node-name" => disk_node
+            }.to_json).as_h
+          
+            execute_qmp_checked("blockdev-add", file_arguments)
+            begin
+              execute_qmp_checked("blockdev-add", format_arguments)
+              execute_qmp_checked("device_add", JSON.parse({
+                "driver" => "virtio-blk-pci",
+                "drive" => disk_node,
+                "id" => device_id,
+                "serial" => device_serial
+              }.to_json).as_h)
+            rescue ex
+              begin
+                execute_qmp_checked("blockdev-del", {"node-name" => JSON::Any.new(disk_node)})
+              rescue
+              end
+              begin
+                execute_qmp_checked("blockdev-del", {"node-name" => JSON::Any.new(file_node)})
+              rescue
+              end
+              raise ex
+            end
+          
+            {device_id: device_id, serial: device_serial}
           end
         end
-        
-        private def execute_qmp_checked(command : String, arguments : Hash(String, JSON::Any)) : JSON::Any
-          response = @vm.execute_qmp(command, arguments)
-          if error = response.as_h["error"]?
-            raise "QMP #{command} failed: #{error}"
+      
+        module CreateDiskImage
+          private def create_disk_image(name : String, size : String, format : String) : String
+            validate_disk_name(name)
+          
+            unless size.matches?(DISK_SIZE_PATTERN)
+              raise ArgumentError.new("Invalid disk size: #{size.inspect}; use e.g. 10G")
+            end
+            validate_disk_format(format)
+          
+            directory = File.expand_path("./disks")
+            Dir.mkdir_p(directory)
+            path = File.join(directory, "#{name}.#{format}")
+            raise "Disk already exists: #{path}" if File.exists?(path)
+          
+            output = IO::Memory.new
+            error = IO::Memory.new
+            result = Process.run("qemu-img", ["create", "-f", format, path, size], output: output, error: error)
+            unless result.success?
+              raise "qemu-img failed (#{result.exit_code}): #{error.to_s.strip}"
+            end
+          
+            path
           end
-          response
         end
+      
+        module CreateExt4Partition
+          private def create_ext4_partition : String
+            <<-SCRIPT
+              if [ ! -b "$partition" ]; then
+                partition_table=$(blkid -p -o value -s PTTYPE "$disk" 2>/dev/null || true)
+                if [ -n "$partition_table" ]; then
+                  echo "Waiting for existing guest partition device"
+                  for attempt in $(seq 1 50); do
+                    [ -b "$partition" ] && break
+                    sleep 0.1
+                  done
+                fi
+                if [ ! -b "$partition" ]; then
+                  filesystem=$(blkid -p -o value -s TYPE "$disk" 2>/dev/null || true)
+                  if [ -n "$partition_table" ] || [ -n "$filesystem" ]; then
+                    echo "Disk has unexpected signatures; refusing to repartition" >&2
+                    exit 1
+                  fi
+                  echo "Creating GPT partition table and ext4 partition"
+                  printf 'label: gpt\\n, , L\\n' | sfdisk "$disk"
+                  blockdev --rereadpt "$disk"
+                  udevadm settle
+                  for attempt in $(seq 1 50); do
+                    [ -b "$partition" ] && break
+                    sleep 0.1
+                  done
+                fi
+              fi
+              [ -b "$partition" ] || { echo "Partition did not appear: $partition" >&2; exit 1; }
+            SCRIPT
+          end
+        end
+      
+        module EnsureExt4Disk
+          private def ensure_ext4_disk(
+            name : String, size : String, mountpoint : String,
+            format : String = "qcow2", progress : Proc(String, Nil)? = nil
+          ) : String
+            guest_mountpoint = validate_guest_mountpoint(mountpoint)
+            path = prepare_ext4_disk_image(name, size, format, progress)
+            ensure_ext4_disk_attachment(path, name, format, progress)
+            provision_ext4_disk(name, guest_mountpoint, path, progress)
+            "#{path} (ext4 mounted at #{guest_mountpoint})"
+          end
+        end
+      
+        module EnsureExt4DiskAttachment
+          private def ensure_ext4_disk_attachment(path, name, format, progress) : Nil
+            suffix = name == "grml-live-build" ? "live_build" : name.gsub(/[^A-Za-z0-9_-]/, "_")
+            device_id = "grml_virtio_disk_#{suffix}"
+            attached_path = find_attached_disk_path(device_id)
+            if attached_path
+              unless File.expand_path(attached_path) == path
+                raise "QEMU device #{device_id} is attached to another image: #{attached_path}"
+              end
+              report_storage_progress(progress, "Reusing QEMU disk attachment: #{device_id}")
+            else
+              report_storage_progress(progress, "Attaching disk to QEMU: #{device_id}")
+              attach_disk_with_serial(path, format, suffix, name)
+            end
+          end
+        end
+      
+        module EnsureExt4ProvisioningCommand
+          private def ensure_ext4_provisioning_command(serial : String, mountpoint : String) : String
+            [
+              "set -eu",
+              "disk=#{shell_quote("/dev/disk/by-id/virtio-#{serial}")}",
+              "partition=\"$disk-part1\"",
+              "mountpoint=#{shell_quote(mountpoint)}",
+              wait_for_ext4_disk,
+              verify_ext4_mount,
+              create_ext4_partition,
+              format_ext4_partition,
+              mount_ext4_partition,
+            ].join("\n")
+          end
+        end
+      
+        module ExecuteQMPChecked
+          private def execute_qmp_checked(command : String, arguments : Hash(String, JSON::Any)) : JSON::Any
+            response = @vm.execute_qmp(command, arguments)
+            if error = response.as_h["error"]?
+              raise "QMP #{command} failed: #{error}"
+            end
+            response
+          end
+        end
+      
+        module Ext4ProvisioningCommand
+          private def ext4_provisioning_command(serial : String, mountpoint : String) : String
+            disk = shell_quote("/dev/disk/by-id/virtio-#{serial}")
+            target = shell_quote(mountpoint)
+          
+            <<-SCRIPT
+              set -eu
+              disk=#{disk}
+              partition="$disk-part1"
+              mountpoint=#{target}
+          
+              for attempt in $(seq 1 50); do
+                [ -b "$disk" ] && break
+                sleep 0.1
+              done
+              if [ ! -b "$disk" ]; then
+                echo "Guest block device did not appear: $disk" >&2
+                exit 1
+              fi
+          
+              if mountpoint -q "$mountpoint"; then
+                echo "Guest mount point is already in use: $mountpoint" >&2
+                exit 1
+              fi
+          
+              printf 'label: gpt\\n, , L\\n' | sfdisk "$disk"
+              blockdev --rereadpt "$disk"
+              udevadm settle
+          
+              for attempt in $(seq 1 50); do
+                [ -b "$partition" ] && break
+                sleep 0.1
+              done
+              if [ ! -b "$partition" ]; then
+                echo "Guest partition did not appear: $partition" >&2
+                exit 1
+              fi
+          
+              mkfs.ext4 -F "$partition"
+              mkdir -p "$mountpoint"
+              mount -t ext4 "$partition" "$mountpoint"
+              findmnt -rn -t ext4 --target "$mountpoint" >/dev/null
+              printf 'Mounted %s on %s as ext4\\n' "$partition" "$mountpoint"
+            SCRIPT
+          end
+        end
+      
+        module FindAttachedDiskPath
+          private def find_attached_disk_path(device_id : String) : String?
+            response = execute_qmp_checked("query-block", Hash(String, JSON::Any).new)
+            records = response.as_h["return"]?.try(&.as_a)
+            raise "QMP query-block returned no block-device list" unless records
+          
+            records.each do |record|
+              block = record.as_h
+              next unless block["device"]?.try(&.as_s) == device_id
+          
+              inserted = block["inserted"]?.try(&.as_h)
+              raise "QMP reports #{device_id} attached without backing-file details" unless inserted
+              path = inserted["file"]?.try(&.as_s)
+              raise "QMP reports #{device_id} attached without a backing-file path" unless path
+              return path
+            end
+          
+            nil
+          end
+        end
+      
+        module FormatExt4Partition
+          private def format_ext4_partition : String
+            <<-SCRIPT
+              filesystem=$(blkid -p -o value -s TYPE "$partition" 2>/dev/null || true)
+              if [ -z "$filesystem" ]; then
+                echo "Formatting new partition as ext4 (mkfs.ext4)"
+                mkfs.ext4 -F "$partition"
+              elif [ "$filesystem" != ext4 ]; then
+                echo "Existing partition has filesystem '$filesystem'; refusing to format it" >&2
+                exit 1
+              else
+                echo "Reusing existing ext4 filesystem"
+              fi
+            SCRIPT
+          end
+        end
+      
+        module MountExt4Partition
+          private def mount_ext4_partition : String
+            <<-SCRIPT
+              echo "Mounting ext4 workspace at $mountpoint"
+              mkdir -p "$mountpoint"
+              mount -t ext4 "$partition" "$mountpoint"
+              echo "Verifying mounted filesystem"
+              findmnt -rn -t ext4 --target "$mountpoint" >/dev/null
+              printf 'Mounted %s on %s as ext4\\n' "$partition" "$mountpoint"
+            SCRIPT
+          end
+        end
+      
+        module PrepareExt4DiskImage
+          private def prepare_ext4_disk_image(name, size, format, progress) : String
+            validate_disk_name(name)
+            raise ArgumentError.new("Invalid disk size: #{size.inspect}") unless size.matches?(DISK_SIZE_PATTERN)
+            validate_disk_format(format)
+            path = File.join(File.expand_path("./disks"), "#{name}.#{format}")
+            if File.exists?(path)
+              raise "Disk image path is not a regular file: #{path}" unless File.file?(path)
+              report_storage_progress(progress, "Reusing host disk image: #{path}")
+            else
+              report_storage_progress(progress, "Creating sparse #{size} disk image: #{path}")
+              path = create_disk_image(name, size, format)
+            end
+            report_storage_progress(progress, "Verifying disk image size and format")
+            verify_disk_image_size(path, format, size)
+            path
+          end
+        end
+      
+        module ProvisionExt4Disk
+          private def provision_ext4_disk(name, mountpoint, path, progress) : Nil
+            report_storage_progress(progress, "Waiting for guest disk and preparing ext4 workspace")
+            result = @interaction.execute_streaming(ensure_ext4_provisioning_command(name, mountpoint), 2.minutes) do |_stream, chunk|
+              report_storage_output(progress, chunk)
+            end
+            raise_ext4_disk_provisioning_error(result, path) unless result.success?
+            report_storage_progress(progress, "Guest ext4 workspace is mounted and verified")
+          end
+        end
+      
+        module RaiseExt4DiskProvisioningError
+          private def raise_ext4_disk_provisioning_error(result, path)
+            details = [result.stdout.strip, result.stderr.strip].reject { |part| part.empty? }.join("\n")
+            message = "Could not provision persistent ext4 build workspace (exit=#{result.exit_code})"
+            message += ":\n#{details}" unless details.empty?
+            raise "#{message}. Disk image is retained at #{path} for recovery."
+          end
+        end
+      
+        module ReportStorageOutput
+          private def report_storage_output(progress : Proc(String, Nil)?, chunk : String) : Nil
+            return if chunk.empty?
+            if callback = progress
+              callback.call(chunk)
+            else
+              Log.info { chunk }
+            end
+          end
+        end
+      
+        module ReportStorageProgress
+          private def report_storage_progress(progress : Proc(String, Nil)?, message : String) : Nil
+            if callback = progress
+              callback.call("#{message}\n")
+            else
+              Log.info { message }
+            end
+          end
+        end
+      
+        module ShellQuote
+          private def shell_quote(value : String) : String
+            "'" + value.gsub("'", "'\\''") + "'"
+          end
+        end
+      
+        module ValidateDiskFormat
+          private def validate_disk_format(format : String) : Nil
+            unless DISK_FORMATS.includes?(format)
+              raise ArgumentError.new("Unsupported disk format #{format.inspect}; choose qcow2 or raw")
+            end
+          end
+        end
+      
+        module ValidateDiskName
+          private def validate_disk_name(name : String) : Nil
+            unless name.matches?(DISK_NAME_PATTERN)
+              raise ArgumentError.new("Invalid disk name: #{name.inspect}")
+            end
+          end
+        end
+      
+        module ValidateGuestMountpoint
+          private def validate_guest_mountpoint(path : String) : String
+            unless path.starts_with?("/") && path != "/" && !path.split("/").any? { |part| part == "." || part == ".." }
+              raise ArgumentError.new("Mount point must be an absolute guest path without '.' or '..' components: #{path.inspect}")
+            end
+            path
+          end
+        end
+      
+        module VerifyDiskImageSize
+          private def verify_disk_image_size(path : String, format : String, requested_size : String) : Nil
+            match = /\A([1-9][0-9]*)([KMGTP])?\z/i.match(requested_size)
+            raise ArgumentError.new("Invalid disk size: #{requested_size.inspect}") unless match
+          
+            multiplier = case match[2]?.try(&.upcase)
+                         when "K" then 1024_i64
+                         when "M" then 1024_i64 ** 2
+                         when "G" then 1024_i64 ** 3
+                         when "T" then 1024_i64 ** 4
+                         when "P" then 1024_i64 ** 5
+                         else        1_i64
+                         end
+            expected_bytes = match[1].to_i64 * multiplier
+          
+            output = IO::Memory.new
+            error = IO::Memory.new
+            result = Process.run("qemu-img", ["info", "--output=json", "-f", format, path], output: output, error: error)
+            unless result.success?
+              raise "qemu-img could not inspect #{path} (#{result.exit_code}): #{error.to_s.strip}"
+            end
+          
+            actual_bytes = JSON.parse(output.to_s).as_h["virtual-size"].as_i
+            if actual_bytes < expected_bytes
+              raise "Disk image #{path} is too small: #{actual_bytes} bytes, #{expected_bytes} required"
+            end
+          end
+        end
+      
+        module VerifyExt4Mount
+          private def verify_ext4_mount : String
+            <<-SCRIPT
+              if mountpoint -q "$mountpoint"; then
+                mounted_source=$(findmnt -n -o SOURCE --target "$mountpoint")
+                mounted_type=$(findmnt -n -o FSTYPE --target "$mountpoint")
+                if [ "$mounted_type" != ext4 ] || [ "$(readlink -f "$mounted_source")" != "$(readlink -f "$partition")" ]; then
+                  echo "Build workspace is mounted from another filesystem" >&2
+                  exit 1
+                fi
+                echo "Existing ext4 build workspace is already mounted at $mountpoint"
+                exit 0
+              fi
+            SCRIPT
+          end
+        end
+      
+        module WaitForExt4Disk
+          private def wait_for_ext4_disk : String
+            <<-SCRIPT
+              echo "Waiting for guest disk device: $disk"
+              for attempt in $(seq 1 50); do
+                [ -b "$disk" ] && break
+                sleep 0.1
+              done
+              if [ ! -b "$disk" ]; then
+                echo "Guest block device did not appear: $disk" >&2
+                exit 1
+              fi
+            SCRIPT
+          end
+        end
+      
+        include AttachDiskWithSerial
+        include CreateDiskImage
+        include EnsureExt4Disk
+        include EnsureExt4ProvisioningCommand
+        include ExecuteQMPChecked
+        include Ext4ProvisioningCommand
+        include FindAttachedDiskPath
+        include ShellQuote
+        include ValidateDiskFormat
+        include ValidateDiskName
+        include ValidateGuestMountpoint
+        include VerifyDiskImageSize
+        include PrepareExt4DiskImage
+        include EnsureExt4DiskAttachment
+        include ProvisionExt4Disk
+        include RaiseExt4DiskProvisioningError
+        include ReportStorageProgress
+        include ReportStorageOutput
+        include WaitForExt4Disk
+        include VerifyExt4Mount
+        include CreateExt4Partition
+        include FormatExt4Partition
+        include MountExt4Partition
       end
     
       module Public
@@ -893,6 +1836,176 @@ module GRML
           Log.error { "GRML agent reported a shutdown failure" }
         end
         @terminated
+      end
+    end
+  
+    module ValidateBuildProfile
+      BUILD_PROFILE_ROOT = "/mnt/shared/profiles"
+      BUILD_PROFILE_BUILDER_PACKAGES = "builder-packages.txt"
+      BUILD_PROFILE_BUILTIN_CLASSES = LiveBuildManifest::BUILTIN_CLASSES
+      BUILD_PROFILE_CONFIG_DIRECTORIES = %w(bootstrap-keyring package_config debconf env files hooks scripts media-files media-scripts tools)
+      
+      def validate_profile(profile_name : String, progress : Proc(String, Nil)? = nil) : LiveBuildManifest
+        validate_build_profile_name(profile_name)
+        profile_directory = "#{BUILD_PROFILE_ROOT}/#{profile_name}"
+        manifest_path = "#{profile_directory}/grml-live/build.yml"
+      
+        verify_profile_tree(profile_directory)
+        report_build_profile_progress(progress, "Reading grml-live build manifest for '#{profile_name}'")
+        manifest = read_build_manifest(manifest_path)
+        manifest.validate!
+      
+        report_build_profile_progress(progress, "Validating builder package list")
+        packages = read_builder_packages(profile_directory)
+        report_build_profile_progress(progress, "Builder packages: #{packages.size}")
+      
+        report_build_profile_progress(progress, "Checking custom grml-live classes")
+        validate_profile_classes(profile_directory, manifest)
+        report_build_profile_progress(progress, "Profile '#{profile_name}' is valid")
+        manifest
+      end
+      
+      private def validate_build_profile_name(profile_name : String) : Nil
+        unless profile_name.matches?(/\A[a-zA-Z0-9][a-zA-Z0-9._-]*\z/)
+          raise ArgumentError.new("Invalid profile name: #{profile_name.inspect}")
+        end
+      end
+      
+      private def verify_profile_tree(profile_directory : String) : Nil
+        command = <<-SHELL
+          set -eu
+          if [ ! -d '#{profile_directory}' ]; then
+            echo "Profile directory not found: #{profile_directory}" >&2
+            exit 2
+          fi
+          if [ ! -f '#{profile_directory}/grml-live/build.yml' ]; then
+            echo "Missing grml-live build manifest: #{profile_directory}/grml-live/build.yml" >&2
+            exit 2
+          fi
+          SHELL
+        result = @interaction.execute(command)
+        unless result.success?
+          raise "Profile directory validation failed (exit=#{result.exit_code}, stderr=#{result.stderr.inspect})"
+        end
+      end
+      
+      private def read_build_manifest(path : String) : LiveBuildManifest
+        command = <<-SHELL
+          set -eu
+          manifest='#{path}'
+          if [ ! -f "$manifest" ]; then
+            echo "Missing grml-live build manifest: $manifest" >&2
+            exit 2
+          fi
+          python3 - "$manifest" <<'PY'
+          import datetime
+          import json
+          import sys
+          import yaml
+      
+          allowed = {
+              "suite", "classes", "hostname", "username", "distri_name",
+              "distri_info", "grml_name", "release_name", "version",
+              "boot_options", "secure_boot", "release", "bootstrap_mirror_url",
+              "grml_live_ref", "iso_name", "date", "wayback_date", "source_date_epoch",
+          }
+      
+          def normalize(value):
+              if isinstance(value, (datetime.date, datetime.datetime)):
+                  return value.isoformat()
+              raise TypeError(f"Unsupported YAML value: {type(value).__name__}")
+      
+          try:
+              with open(sys.argv[1], encoding="utf-8") as manifest_file:
+                  data = yaml.safe_load(manifest_file)
+              if not isinstance(data, dict):
+                  raise ValueError("Manifest root must be a YAML mapping")
+              unknown = sorted(set(data) - allowed)
+              if unknown:
+                  raise ValueError("Unknown manifest key(s): " + ", ".join(unknown))
+              print(json.dumps(data, default=normalize))
+          except Exception as error:
+              print(f"Invalid grml-live build manifest: {error}", file=sys.stderr)
+              sys.exit(3)
+          PY
+          SHELL
+      
+        result = @interaction.execute(command, 30.seconds)
+        unless result.success?
+          raise "Could not read grml-live build manifest (exit=#{result.exit_code}, stderr=#{result.stderr.inspect})"
+        end
+      
+        LiveBuildManifest.from_json(result.stdout)
+      rescue ex : JSON::ParseException
+        raise "Could not parse grml-live build manifest JSON: #{ex.message}"
+      end
+      
+      private def read_builder_packages(profile_directory : String) : Array(String)
+        packages_file = "#{profile_directory}/#{BUILD_PROFILE_BUILDER_PACKAGES}"
+        command = <<-SHELL
+          set -eu
+          packages_file='#{packages_file}'
+          [ -f "$packages_file" ] || exit 0
+          awk '
+            {
+              sub(/#.*/, "")
+              gsub(/^[[:space:]]+|[[:space:]]+$/, "")
+              if ($0 == "") next
+              if ($0 !~ /^[a-z0-9][a-z0-9+.-]*$/) {
+                printf "Invalid Debian builder package name on line %d: %s\\\\n", NR, $0 > "/dev/stderr"
+                exit 2
+              }
+              print
+            }
+          ' "$packages_file"
+          SHELL
+        result = @interaction.execute(command)
+        unless result.success?
+          raise "Could not read builder package list (exit=#{result.exit_code}, stderr=#{result.stderr.inspect})"
+        end
+      
+        result.stdout.lines.map(&.strip).reject(&.empty?).uniq
+      end
+      
+      private def validate_profile_classes(profile_directory : String, manifest : LiveBuildManifest) : Nil
+        custom_classes = manifest.classes.reject { |class_name| BUILD_PROFILE_BUILTIN_CLASSES.includes?(class_name) }
+        return if custom_classes.empty?
+      
+        config_directory = "#{profile_directory}/grml-live/config"
+        command = <<-SHELL
+          set -eu
+          config='#{config_directory}'
+          for class_name in #{custom_classes.map { |name| shell_quote(name) }.join(" ")}; do
+            found=0
+            for category in #{BUILD_PROFILE_CONFIG_DIRECTORIES.join(" ")}; do
+              if [ -e "$config/$category/$class_name" ]; then
+                found=1
+                break
+              fi
+            done
+            if [ "$found" -ne 1 ]; then
+              echo "Custom class '$class_name' has no definition under $config" >&2
+              exit 4
+            fi
+          done
+          SHELL
+      
+        result = @interaction.execute(command)
+        unless result.success?
+          raise "Profile class validation failed (exit=#{result.exit_code}, stderr=#{result.stderr.inspect})"
+        end
+      end
+      
+      private def shell_quote(value : String) : String
+        "'" + value.gsub("'", "'\\\\''") + "'"
+      end
+      
+      private def report_build_profile_progress(progress : Proc(String, Nil)?, message : String) : Nil
+        if callback = progress
+          callback.call("#{message}\\n")
+        else
+          Log.info { message }
+        end
       end
     end
   
@@ -1264,6 +2377,9 @@ module GRML
     include PrepareAlpineBundle
     include PrepareDebCache
     include VerifyDebCache
+    include ValidateBuildProfile
+    include PrepareBuildEnvironment
+    include BuildISO
     include Storage
     include Terminate
   end
@@ -1524,6 +2640,171 @@ module GRML
     end
   end
 
+  class LiveBuildManifest
+      property suite : String = "trixie"
+      property classes : Array(String) = ["GRML_SMALL"]
+      property hostname : String = "grml"
+      property username : String = "grml"
+      property distri_name : String = "grml"
+      property distri_info : String = "Custom Grml Live Linux system"
+      property grml_name : String = "grml"
+      property release_name : String = "custom"
+      property version : String = "0.1.0"
+      property boot_options : Array(String) = [] of String
+      property secure_boot : Bool = false
+      property release : Bool = true
+      property bootstrap_mirror_url : String = "http://deb.debian.org/debian"
+      property grml_live_ref : String = "master"
+      property iso_name : String? = nil
+      property date : String? = nil
+      property wayback_date : String? = nil
+      property source_date_epoch : Int64? = nil
+    
+      def self.from_json(source : String) : self
+        data = JSON.parse(source).as_h
+    
+        classes = data["classes"]?.try(&.as_a.map(&.as_s)) || ["GRML_SMALL"]
+        boot_options = data["boot_options"]?.try(&.as_a.map(&.as_s)) || [] of String
+    
+        new(
+          suite: data["suite"]?.try(&.as_s) || "trixie",
+          classes: classes,
+          hostname: data["hostname"]?.try(&.as_s) || "grml",
+          username: data["username"]?.try(&.as_s) || "grml",
+          distri_name: data["distri_name"]?.try(&.as_s) || "grml",
+          distri_info: data["distri_info"]?.try(&.as_s) || "Custom Grml Live Linux system",
+          grml_name: data["grml_name"]?.try(&.as_s) || "grml",
+          release_name: data["release_name"]?.try(&.as_s) || "custom",
+          version: data["version"]?.try(&.as_s) || "0.1.0",
+          boot_options: boot_options,
+          secure_boot: data["secure_boot"]?.try(&.as_bool) || false,
+          release: data["release"]?.try(&.as_bool) != false,
+          bootstrap_mirror_url: data["bootstrap_mirror_url"]?.try(&.as_s) || "http://deb.debian.org/debian",
+          grml_live_ref: data["grml_live_ref"]?.try(&.as_s) || "master",
+          iso_name: data["iso_name"]?.try(&.as_s?),
+          date: data["date"]?.try(&.as_s?),
+          wayback_date: data["wayback_date"]?.try(&.as_s?),
+          source_date_epoch: data["source_date_epoch"]?.try(&.as_i64?)
+        )
+      end
+    
+      def initialize(
+        @suite : String = "trixie",
+        @classes : Array(String) = ["GRML_SMALL"],
+        @hostname : String = "grml",
+        @username : String = "grml",
+        @distri_name : String = "grml",
+        @distri_info : String = "Custom Grml Live Linux system",
+        @grml_name : String = "grml",
+        @release_name : String = "custom",
+        @version : String = "0.1.0",
+        @boot_options : Array(String) = [] of String,
+        @secure_boot : Bool = false,
+        @release : Bool = true,
+        @bootstrap_mirror_url : String = "http://deb.debian.org/debian",
+        @grml_live_ref : String = "master",
+        @iso_name : String? = nil,
+        @date : String? = nil,
+        @wayback_date : String? = nil,
+        @source_date_epoch : Int64? = nil
+      )
+      end
+    
+      BUILTIN_CLASSES = %w(
+        DEBORPHAN FRESHCLAM GRML_FULL GRML_GHACI GRML_GHACI_CLOUD GRML_SMALL
+        LATEX LATEX_CLEANUP LOCALES NO_ONLINE REMOVE_DOCS SOURCES TOR XORG ZFS
+      )
+    
+      RESERVED_CLASSES = %w(GRMLBASE SECURE_BOOT RELEASE AMD64 ARM64 I386)
+    
+      def validate! : Nil
+        validate_token(suite, "suite")
+        validate_token(hostname, "hostname")
+        validate_token(username, "username")
+        validate_token(distri_name, "distri_name")
+        validate_token(grml_name, "grml_name")
+        validate_token(version, "version")
+    
+        unless grml_live_ref.matches?(/\A[A-Za-z0-9][A-Za-z0-9._\/-]*\z/) &&
+               !grml_live_ref.split('/').includes?("..")
+          raise ArgumentError.new("Invalid grml_live_ref: #{grml_live_ref.inspect}")
+        end
+    
+        unless bootstrap_mirror_url.matches?(/\Ahttps?:\/\/[^\s]+\z/)
+          raise ArgumentError.new("bootstrap_mirror_url must be an HTTP(S) URL")
+        end
+    
+        if classes.empty?
+          raise ArgumentError.new("At least one grml-live class must be selected")
+        end
+    
+        seen = Set(String).new
+        classes.each do |class_name|
+          unless class_name.matches?(/\A[A-Z][A-Z0-9_]*\z/)
+            raise ArgumentError.new("Invalid grml-live class name: #{class_name.inspect}")
+          end
+          if RESERVED_CLASSES.includes?(class_name) || class_name.starts_with?("DEBIAN_")
+            raise ArgumentError.new("Class #{class_name} is added automatically by grml-live and must not be requested")
+          end
+          if seen.includes?(class_name)
+            raise ArgumentError.new("Duplicate grml-live class: #{class_name}")
+          end
+          seen.add(class_name)
+        end
+    
+        boot_options.each do |option|
+          if option.empty? || option.bytesize > 256 || option.includes?('\n') || option.includes?('\r') || option.includes?('\0')
+            raise ArgumentError.new("Invalid boot option: #{option.inspect}")
+          end
+        end
+    
+        if boot_options.join(" ").bytesize > 1024
+          raise ArgumentError.new("Combined boot options exceed 1024 bytes")
+        end
+    
+        validate_display_text(distri_info, "distri_info", 512)
+        validate_display_text(release_name, "release_name", 128)
+    
+        if name = iso_name
+          unless name.ends_with?(".iso") && name.matches?(/\A[A-Za-z0-9][A-Za-z0-9._-]*\.iso\z/)
+            raise ArgumentError.new("iso_name must be a filename ending in .iso")
+          end
+        end
+    
+        if build_date = date
+          unless build_date.matches?(/\A[0-9]{4}-[0-9]{2}-[0-9]{2}\z/)
+            raise ArgumentError.new("date must use YYYY-MM-DD format")
+          end
+        end
+    
+        if snapshot = wayback_date
+          unless snapshot.matches?(/\A[0-9]{8}(?:T[0-9]{6}Z)?\z/)
+            raise ArgumentError.new("wayback_date must use YYYYMMDD or YYYYMMDDTHHMMSSZ format")
+          end
+        end
+    
+        if epoch = source_date_epoch
+          raise ArgumentError.new("source_date_epoch must be a positive Unix timestamp") unless epoch > 0
+        end
+      end
+    
+      def classes_argument : String
+        classes.join(",")
+      end
+    
+      private def validate_token(value : String, label : String) : Nil
+        unless value.matches?(/\A[A-Za-z0-9][A-Za-z0-9._-]*\z/)
+          raise ArgumentError.new("Invalid #{label}: #{value.inspect}")
+        end
+      end
+    
+      private def validate_display_text(value : String, label : String, max_bytes : Int32) : Nil
+        if value.empty? || value.bytesize > max_bytes || value.includes?('\n') || value.includes?('\r') || value.includes?('\0')
+          raise ArgumentError.new("Invalid #{label}")
+        end
+      end
+  end
+
   class REPL
     module ApplyProfile
       def apply_profile(agent : T, arguments : Array(String), progress : Proc(String, Nil)? = nil) : String forall T
@@ -1548,6 +2829,22 @@ module GRML
       end
     end
   
+    module BuildISO
+      def build_iso(agent : T, arguments : Array(String), progress : Proc(String, Nil)? = nil) : String forall T
+        unless arguments.size == 1
+          raise ArgumentError.new("Usage: build_iso PROFILE_NAME")
+        end
+      
+        profile_name = arguments.first
+        unless profile_name.matches?(/\A[a-zA-Z0-9][a-zA-Z0-9._-]*\z/)
+          raise ArgumentError.new("Invalid profile name: #{profile_name.inspect}")
+        end
+      
+        agent.verify_shared_directory
+        agent.build_iso(profile_name, progress)
+      end
+    end
+  
     module PrepareAlpineBundle
       DEFAULT_ALPINE_BRANCH = "latest-stable"
       
@@ -1562,6 +2859,23 @@ module GRML
         branch = alpine_branch(arguments)
         agent.prepare_alpine_bundle(branch, progress)
         "Prepared Alpine offline bundle (branch: #{branch})."
+      end
+    end
+  
+    module PrepareBuildEnvironment
+      def prepare_build_environment(agent : T, arguments : Array(String), progress : Proc(String, Nil)? = nil) : String forall T
+        unless arguments.size == 1
+          raise ArgumentError.new("Usage: prepare_build_environment PROFILE_NAME")
+        end
+      
+        profile_name = arguments.first
+        unless profile_name.matches?(/\A[a-zA-Z0-9][a-zA-Z0-9._-]*\z/)
+          raise ArgumentError.new("Invalid profile name: #{profile_name.inspect}")
+        end
+      
+        agent.verify_shared_directory
+        agent.prepare_build_environment(profile_name, progress)
+        "Prepared grml-live build environment for '#{profile_name}'."
       end
     end
   
@@ -1625,6 +2939,23 @@ module GRML
       end
     end
   
+    module ValidateProfile
+      def validate_profile(agent : T, arguments : Array(String), progress : Proc(String, Nil)? = nil) : String forall T
+        unless arguments.size == 1
+          raise ArgumentError.new("Usage: validate_profile PROFILE_NAME")
+        end
+      
+        profile_name = arguments.first
+        unless profile_name.matches?(/\A[a-zA-Z0-9][a-zA-Z0-9._-]*\z/)
+          raise ArgumentError.new("Invalid profile name: #{profile_name.inspect}")
+        end
+      
+        agent.verify_shared_directory
+        manifest = agent.validate_profile(profile_name, progress)
+        "Validated '#{profile_name}': suite=#{manifest.suite}, classes=#{manifest.classes_argument}."
+      end
+    end
+  
     module VerifyDebCache
       DEFAULT_DEB_CACHE_VERIFICATION_PACKAGE = "hello"
       
@@ -1649,6 +2980,9 @@ module GRML
     extend PrepareAlpineBundle
     extend PrepareDebCache
     extend ApplyProfile
+    extend PrepareBuildEnvironment
+    extend ValidateProfile
+    extend BuildISO
     extend VerifyDebCache
     extend BuildDefinition
     extend Run
@@ -1679,6 +3013,18 @@ module GRML
             format = arguments[1]? || "qcow2"
             device_id = agent.attach_disk(arguments[0], format)
             context.puts("Attached #{File.expand_path(arguments[0])} as #{device_id}")
+          end
+          nil
+        end
+      end
+    
+      module BuildISO
+        NAME = "build_iso"
+        
+        def self.register(repl : TmuxREPL::Definition, agent : T) : Nil forall T
+          repl.on_command(NAME) do |context, arguments|
+            progress = ->(message : String) { context.write(message) }
+            GRML::REPL.build_iso(agent, arguments, progress)
           end
           nil
         end
@@ -1776,6 +3122,18 @@ module GRML
         end
       end
     
+      module PrepareBuildEnvironment
+        NAME = "prepare_build_environment"
+        
+        def self.register(repl : TmuxREPL::Definition, agent : T) : Nil forall T
+          repl.on_command(NAME) do |context, arguments|
+            progress = ->(message : String) { context.write(message) }
+            GRML::REPL.prepare_build_environment(agent, arguments, progress)
+          end
+          nil
+        end
+      end
+    
       module PrepareDebCache
         NAME = "prepare_deb_cache"
         
@@ -1783,6 +3141,18 @@ module GRML
           repl.on_command(NAME) do |context, arguments|
             progress = ->(message : String) { context.write(message) }
             GRML::REPL.prepare_deb_cache(agent, arguments, progress)
+          end
+          nil
+        end
+      end
+    
+      module ValidateProfile
+        NAME = "validate_profile"
+        
+        def self.register(repl : TmuxREPL::Definition, agent : T) : Nil forall T
+          repl.on_command(NAME) do |context, arguments|
+            progress = ->(message : String) { context.write(message) }
+            GRML::REPL.validate_profile(agent, arguments, progress)
           end
           nil
         end
@@ -1809,6 +3179,9 @@ module GRML
           GRML::REPL::Commands::PrepareAlpineBundle.register(repl, agent)
           GRML::REPL::Commands::PrepareDebCache.register(repl, agent)
           GRML::REPL::Commands::ApplyProfile.register(repl, agent)
+          GRML::REPL::Commands::PrepareBuildEnvironment.register(repl, agent)
+          GRML::REPL::Commands::ValidateProfile.register(repl, agent)
+          GRML::REPL::Commands::BuildISO.register(repl, agent)
           GRML::REPL::Commands::VerifyDebCache.register(repl, agent)
           GRML::REPL::Commands::CreateDisk.register(repl, agent)
           GRML::REPL::Commands::AttachDisk.register(repl, agent)
