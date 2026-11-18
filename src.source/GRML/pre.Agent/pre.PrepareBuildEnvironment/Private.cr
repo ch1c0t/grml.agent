@@ -5,6 +5,9 @@ include EnsureBuildWorkspace
 include ReportBuildEnvironmentOutput
 include ReportBuildEnvironmentStage
 include RunBuildEnvironmentCommand
+include BuildEnvironmentDiagnosticCommand
+include BuildEnvironmentDiagnosticScript
+include BuildEnvironmentCommandError
 include PrepareBuildProfile
 include PrepareBuildCache
 include PrepareBuildDependencies
@@ -12,3 +15,4 @@ include BuildDependenciesCommand
 include PrepareBuildBuilderAccount
 include BuildBuilderAccountCommand
 include BuildSubordinateIDCommand
+include BuildSubordinateIDScript
