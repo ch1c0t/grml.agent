@@ -135,7 +135,7 @@
     end
 
     if snapshot = wayback_date
-      unless snapshot.matches?(/\\A[0-9]{8}(?:T[0-9]{6}Z)?\\z/)
+      unless snapshot.matches?(/\A[0-9]{8}(?:T[0-9]{6}Z)?\z/)
         raise ArgumentError.new("wayback_date must use YYYYMMDD or YYYYMMDDTHHMMSSZ format")
       end
     end
