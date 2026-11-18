@@ -10,3 +10,14 @@ include ValidateDiskFormat
 include ValidateDiskName
 include ValidateGuestMountpoint
 include VerifyDiskImageSize
+include PrepareExt4DiskImage
+include EnsureExt4DiskAttachment
+include ProvisionExt4Disk
+include RaiseExt4DiskProvisioningError
+include ReportStorageProgress
+include ReportStorageOutput
+include WaitForExt4Disk
+include VerifyExt4Mount
+include CreateExt4Partition
+include FormatExt4Partition
+include MountExt4Partition
