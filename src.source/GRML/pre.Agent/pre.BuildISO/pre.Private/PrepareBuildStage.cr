@@ -24,8 +24,8 @@ private def prepare_build_stage(
     run='#{shared_run_directory}'
     shared_output='#{shared_output_directory}'
 
-    mkdir -p '#{GRML_LIVE_BUILD_STAGE_ROOT}' "$stage" "$config" "$output" "$tmp" "$run" "$shared_output"
-    chmod 0755 '#{GRML_LIVE_BUILD_STAGE_ROOT}' "$stage" "$config" "$output" "$tmp"
+    mkdir -p '#{::GRML::Agent::PrepareBuildEnvironment::GRML_LIVE_BUILD_STAGE_ROOT}' "$stage" "$config" "$output" "$tmp" "$run" "$shared_output"
+    chmod 0755 '#{::GRML::Agent::PrepareBuildEnvironment::GRML_LIVE_BUILD_STAGE_ROOT}' "$stage" "$config" "$output" "$tmp"
     cp -a "$checkout/config/." "$config/"
     if [ -d "$profile_config" ]; then
       cp -a "$profile_config/." "$config/"
