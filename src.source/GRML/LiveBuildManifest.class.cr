@@ -1,6 +1,4 @@
 class LiveBuildManifest
-  include JSON::Serializable
-
   property suite : String = "trixie"
   property classes : Array(String) = ["GRML_SMALL"]
   property hostname : String = "grml"
@@ -18,6 +16,54 @@ class LiveBuildManifest
   property iso_name : String? = nil
   property date : String? = nil
   property source_date_epoch : Int64? = nil
+
+  def self.from_json(source : String) : self
+    data = JSON.parse(source).as_h
+
+    classes = data["classes"]?.try(&.as_a.map(&.as_s)) || ["GRML_SMALL"]
+    boot_options = data["boot_options"]?.try(&.as_a.map(&.as_s)) || [] of String
+
+    new(
+      suite: data["suite"]?.try(&.as_s) || "trixie",
+      classes: classes,
+      hostname: data["hostname"]?.try(&.as_s) || "grml",
+      username: data["username"]?.try(&.as_s) || "grml",
+      distri_name: data["distri_name"]?.try(&.as_s) || "grml",
+      distri_info: data["distri_info"]?.try(&.as_s) || "Custom Grml Live Linux system",
+      grml_name: data["grml_name"]?.try(&.as_s) || "grml",
+      release_name: data["release_name"]?.try(&.as_s) || "custom",
+      version: data["version"]?.try(&.as_s) || "0.1.0",
+      boot_options: boot_options,
+      secure_boot: data["secure_boot"]?.try(&.as_bool) || false,
+      release: data["release"]?.try(&.as_bool) != false,
+      bootstrap_mirror_url: data["bootstrap_mirror_url"]?.try(&.as_s) || "http://deb.debian.org/debian",
+      grml_live_ref: data["grml_live_ref"]?.try(&.as_s) || "master",
+      iso_name: data["iso_name"]?.try(&.as_s?),
+      date: data["date"]?.try(&.as_s?),
+      source_date_epoch: data["source_date_epoch"]?.try(&.as_i64?)
+    )
+  end
+
+  def initialize(
+    @suite : String = "trixie",
+    @classes : Array(String) = ["GRML_SMALL"],
+    @hostname : String = "grml",
+    @username : String = "grml",
+    @distri_name : String = "grml",
+    @distri_info : String = "Custom Grml Live Linux system",
+    @grml_name : String = "grml",
+    @release_name : String = "custom",
+    @version : String = "0.1.0",
+    @boot_options : Array(String) = [] of String,
+    @secure_boot : Bool = false,
+    @release : Bool = true,
+    @bootstrap_mirror_url : String = "http://deb.debian.org/debian",
+    @grml_live_ref : String = "master",
+    @iso_name : String? = nil,
+    @date : String? = nil,
+    @source_date_epoch : Int64? = nil
+  )
+  end
 
   BUILTIN_CLASSES = %w(
     DEBORPHAN FRESHCLAM GRML_FULL GRML_GHACI GRML_GHACI_CLOUD GRML_SMALL
