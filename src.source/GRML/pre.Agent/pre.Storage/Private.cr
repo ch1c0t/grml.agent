@@ -4,12 +4,14 @@ include EnsureExt4Disk
 include EnsureExt4ProvisioningCommand
 include ExecuteQMPChecked
 include Ext4ProvisioningCommand
+include FindAttachedDiskInfo
 include FindAttachedDiskPath
 include ShellQuote
 include ValidateDiskFormat
 include ValidateDiskName
 include ValidateGuestMountpoint
 include VerifyDiskImageSize
+include VerifyAttachedDiskImage
 include PrepareExt4DiskImage
 include EnsureExt4DiskAttachment
 include ProvisionExt4Disk
@@ -22,4 +24,5 @@ include CreateExt4Partition
 include FormatExt4Partition
 include MountExt4Partition
 include DiskSizeMultiplier
+include ExpectedDiskImageSize
 include DiskImageVirtualSize

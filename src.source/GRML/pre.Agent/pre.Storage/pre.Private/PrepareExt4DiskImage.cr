@@ -10,7 +10,14 @@ private def prepare_ext4_disk_image(name, size, format, progress) : String
     report_storage_progress(progress, "Creating sparse #{size} disk image: #{path}")
     path = create_disk_image(name, size, format)
   end
-  report_storage_progress(progress, "Verifying disk image size and format")
-  verify_disk_image_size(path, format, size)
+  suffix = name == "grml-live-build" ? "live_build" : name.gsub(/[^A-Za-z0-9_-]/, "_")
+  attached = find_attached_disk_info("grml_virtio_disk_#{suffix}")
+  if attached
+    report_storage_progress(progress, "Verifying attached image metadata through QMP")
+    verify_attached_disk_image(attached, path, format, size)
+  else
+    report_storage_progress(progress, "Verifying detached disk image size and format")
+    verify_disk_image_size(path, format, size)
+  end
   path
 end
