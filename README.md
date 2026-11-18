@@ -109,8 +109,10 @@ scripts, hooks, debconf preseeding, file overlays, and media customizations
 can be provided by the other directories. The grml/ directory holds global
 settings such as squashfs exclusions. The profile configuration is merged
 over the selected grml-live checkout's default configuration, so it does not
-need to copy the upstream GRMLBASE or GRML_SMALL definitions. Profile files
-must not be symbolic links.
+need to copy the upstream GRMLBASE or GRML_SMALL definitions. Filesystem
+overlays preserve symbolic links, which can be useful for system configuration
+and service enablement. Use only profile content you trust, especially scripts
+and hooks.
 
 Example grml-live/build.yml:
 
