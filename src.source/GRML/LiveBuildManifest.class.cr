@@ -1,6 +1,3 @@
-require "json"
-require "set"
-
 class LiveBuildManifest
   include JSON::Serializable
 
