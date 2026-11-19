@@ -27,9 +27,10 @@ inline comments are ignored. Duplicate package names are removed. A missing
 ./bin/grml.agent boot development
 ```
 
-The optional profile argument selects `/mnt/shared/profiles/development/packages.txt`.
-After the GRML shell and QEMU Guest Agent are ready, the agent verifies the
-shared directory and applies the profile.
+The optional profile argument selects
+`/mnt/shared/profiles/development/packages.txt`. After the GRML shell and
+QEMU Guest Agent are ready, the agent verifies the shared directory and
+applies the profile.
 
 For a non-empty package list, the agent:
 
@@ -85,6 +86,32 @@ The optional ISO path can be combined with a profile:
 
 For the ISO lookup rules when `--iso` is omitted, see
 [Host-side REPL and runtime configuration](host-repl.md#iso-discovery).
+
+## Install host executables
+
+A profile can optionally contain `host-executables.txt`. Each entry names
+a command to look up on the host and an HTTPS fallback URL:
+
+```text
+# host command, then fallback URL for a Linux guest binary
+mitamae https://github.com/itamae-kitchen/mitamae/releases/latest/download/mitamae-x86_64-linux
+```
+
+When the profile is applied, the agent first searches the host's executable
+`PATH`. When it finds the command, it copies that file to the guest.
+Otherwise, it downloads the configured URL on the host with `curl`, then
+copies the downloaded file. Both paths install the executable as
+`/usr/local/bin/<command>` with mode `0755`. The fallback URL can point to
+a moving release URL such as GitHub's `releases/latest/download` endpoint;
+the version is resolved when the profile is applied. Host-side `curl` is
+needed only when the command is not already available.
+
+The host executable is copied as-is, so it must be compatible with the
+guest's operating system and architecture. A fallback should likewise name
+a Linux release asset for the guest architecture. Blank lines and comments
+are ignored; each entry must contain exactly a command name and an HTTPS
+URL. Duplicate command names are rejected. The file is optional, and profiles
+without it retain their existing behavior.
 
 ## Keep package lists separate
 

@@ -10,6 +10,7 @@ def apply_profile(
     raise ArgumentError.new("Invalid profile name: #{profile_name.inspect}")
   end
 
+  host_executables = profile_host_executables(profile_name)
   packages_file = "#{DEBIAN_PROFILE_DIRECTORY}/#{profile_name}/packages.txt"
   report_profile_progress(progress, "Reading package list for profile '#{profile_name}'")
 
@@ -41,15 +42,16 @@ def apply_profile(
   end
 
   packages = profile_result.stdout.lines.map(&.strip).reject(&.empty?).uniq
-  if packages.empty? && !verify_cache
-    report_profile_progress(progress, "Profile '#{profile_name}' contains no packages; skipping APT cache preparation")
-    return
-  end
-
-  report_profile_progress(progress, "Preparing shared Debian package cache for profile '#{profile_name}'")
-  prepare_deb_cache(progress)
-
-  unless packages.empty?
+  if packages.empty?
+    if verify_cache
+      report_profile_progress(progress, "Profile '#{profile_name}' contains no packages; preparing cache for verification")
+      prepare_deb_cache(progress)
+    else
+      report_profile_progress(progress, "Profile '#{profile_name}' contains no packages; skipping APT cache preparation")
+    end
+  else
+    report_profile_progress(progress, "Preparing shared Debian package cache for profile '#{profile_name}'")
+    prepare_deb_cache(progress)
     report_profile_progress(progress, "Installing #{packages.size} package(s) from profile '#{profile_name}'")
     install_command = <<-SHELL
       set -eu
@@ -70,6 +72,8 @@ def apply_profile(
     report_profile_progress(progress, "Verifying shared Debian package cache after applying profile '#{profile_name}'")
     verify_deb_cache("hello", progress)
   end
+
+  install_profile_host_executables(host_executables, progress)
 end
 
 private def report_profile_output(progress : Proc(String, Nil)?, chunk : String) : Nil

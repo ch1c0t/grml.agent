@@ -1,0 +1,2 @@
+# Install mitamae from the host when present, otherwise use its latest Linux release.
+mitamae https://github.com/itamae-kitchen/mitamae/releases/latest/download/mitamae-x86_64-linux
