@@ -6,8 +6,8 @@ private def expand_profile_mitamae_recipe(root : String, name : String,
   end
   path = File.join(path, "default.rb") if Dir.exists?(path)
   raise ArgumentError.new("Mitamae recipe not found: #{path}") unless File.file?(path)
-  real = File.real_path(path)
-  raise ArgumentError.new("Mitamae recipe escapes profile: #{name.inspect}") unless real.starts_with?("#{File.real_path(root)}/")
+  real = File.realpath(path)
+  raise ArgumentError.new("Mitamae recipe escapes profile: #{name.inspect}") unless real.starts_with?("#{File.realpath(root)}/")
   relative = path.sub("#{root}/", "")
   expand_profile_recipe_file(root, path, relative, visiting, recipes)
 end
