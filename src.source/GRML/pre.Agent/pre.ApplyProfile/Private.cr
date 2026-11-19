@@ -1,4 +1,8 @@
+include ApplyProfilePackages
 include DownloadProfileExecutable
 include FindProfileHostExecutable
 include InstallProfileHostExecutables
+include InstallProfilePackages
 include ProfileHostExecutables
+include ReadProfilePackages
+include ReportProfileProgress
