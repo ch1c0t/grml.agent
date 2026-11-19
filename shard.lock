@@ -6,7 +6,7 @@ shards:
 
   amqp-client:
     git: https://github.com/cloudamqp/amqp-client.cr.git
-    version: 1.4.0
+    version: 1.5.0
 
   global-amqp_channel:
     git: https://github.com/ch1c0t/crystal.global-amqp_channel.git
@@ -47,3 +47,4 @@ shards:
   xephyr_context:
     git: https://github.com/ch1c0t/xephyr.context.git
     version: 0.0.0+git.commit.9c88a91c1af54e49ff62d9a5d5b79fb950a0c7bf
+
