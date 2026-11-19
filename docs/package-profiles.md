@@ -21,6 +21,24 @@ Names are validated before APT is invoked; whitespace around entries and
 inline comments are ignored. Duplicate package names are removed. A missing
 `packages.txt` or an invalid entry makes profile application fail.
 
+A profile may also contain an optional `profiles.txt` file listing profiles
+that should be applied before it:
+
+```text
+# Apply these profiles first, in this order
+base
+console
+```
+
+Names in `profiles.txt` refer to directories under `shared/profiles/`.
+Blank lines and comments are ignored. Dependencies are applied recursively,
+in listed order, and the selected profile is applied last. A dependency
+referenced through more than one path is applied only once. Cycles and
+invalid profile names are rejected before any profile packages or host
+executables are installed. Duplicate dependency names within one file are
+also rejected. This lets profiles share common foundations without repeating
+their package lists.
+
 ## Boot with a profile
 
 ```sh
@@ -30,7 +48,7 @@ inline comments are ignored. Duplicate package names are removed. A missing
 The optional profile argument selects
 `/mnt/shared/profiles/development/packages.txt`. After the GRML shell and
 QEMU Guest Agent are ready, the agent verifies the shared directory and
-applies the profile.
+applies the profile and its dependencies.
 
 For a non-empty package list, the agent:
 
@@ -46,7 +64,8 @@ guest. Later runs reuse package archives in the shared cache. See
 
 An empty package list skips cache preparation and package installation by
 default. When `--verify-deb-cache` is supplied, cache preparation and the
-cache verification still run even if the package list is empty.
+cache verification still run after all profiles have been applied, even if
+all package lists are empty.
 
 The CLI syntax is:
 
@@ -74,7 +93,8 @@ apply_profile development
 ```
 
 Profile application is additive: it installs or updates the packages listed
-in the selected profile, but does not uninstall packages omitted from it.
+in the selected profile and its dependencies, but does not uninstall packages
+omitted from them.
 Applying a second profile therefore does not undo packages installed by an
 earlier profile.
 

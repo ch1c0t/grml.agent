@@ -9,6 +9,7 @@ QEMU shared directory under `profiles/<name>/`; the guest sees it under
 
 ```text
 shared/profiles/rescue/
+├── profiles.txt                 # optional dependencies for boot/apply_profile
 ├── packages.txt                 # optional packages for the running GRML guest
 ├── builder-packages.txt         # optional extra build-environment packages
 └── grml-live/
@@ -28,6 +29,12 @@ shared/profiles/rescue/
     │   └── grml/                  # global grml-live configuration
     └── chroot-install/           # optional files installed under / in the chroot
 ```
+
+The `profiles.txt` file composes package profiles for `boot PROFILE` and
+`apply_profile PROFILE`; it is not a grml-live build manifest and does not
+change `validate_profile` or `build_iso`. See
+[Boot package profiles](package-profiles.md#boot-with-a-profile) for its
+syntax and application order.
 
 The `grml-live/config/` directories use the class-based configuration format
 expected by grml-live. For each custom class, add one or more definitions

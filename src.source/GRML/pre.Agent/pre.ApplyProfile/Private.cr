@@ -3,6 +3,9 @@ include DownloadProfileExecutable
 include FindProfileHostExecutable
 include InstallProfileHostExecutables
 include InstallProfilePackages
+include ProfileApplicationOrder
+include ProfileDependencies
 include ProfileHostExecutables
 include ReadProfilePackages
 include ReportProfileProgress
+include VerifyProfileCache
