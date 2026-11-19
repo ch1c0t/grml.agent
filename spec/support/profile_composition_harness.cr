@@ -5,10 +5,20 @@ class ProfileCompositionSpecVM
   def initialize(@shared_path : String); end
 end
 
+class ProfileCompositionSpecInteraction
+  def execute_streaming(command : String, timeout : Time::Span = 30.seconds,
+                        &block : Symbol, String ->) : QEMU::CommandResult
+    QEMU::CommandResult.new(0, "", "")
+  end
+end
+
 class ProfileCompositionSpecAgent
   include GRML::Agent::ApplyProfile
   getter applied_profiles = [] of String
-  def initialize(shared_path : String); @vm = ProfileCompositionSpecVM.new(shared_path); end
+  def initialize(shared_path : String)
+    @vm = ProfileCompositionSpecVM.new(shared_path)
+    @interaction = ProfileCompositionSpecInteraction.new
+  end
   private def read_profile_packages(name : String, progress : Proc(String, Nil)?) : Array(String); [name]; end
   private def install_profile_packages(name : String, packages : Array(String), progress : Proc(String, Nil)?) : Nil
     @applied_profiles << name
