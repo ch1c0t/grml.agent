@@ -15,8 +15,8 @@ describe "GRML guest disk lookup" do
     command.should contain("/sys/block/vd*/serial")
     command.should contain("actual_serial")
     command.should contain("report_missing_ext4_disk")
-    command.should contain('partition="$disk-part1"')
-    command.should contain('partition="${disk}1"')
+    command.should contain("partition=\"$disk-part1\"")
+    command.should contain("partition=\"${disk}1\"")
     command.should contain("lsblk -o NAME,PATH,TYPE,SIZE,SERIAL")
   end
 end
