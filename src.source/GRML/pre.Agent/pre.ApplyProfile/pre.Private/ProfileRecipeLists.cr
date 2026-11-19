@@ -1,6 +1,6 @@
 private def expand_profile_recipe_list(root : String, path : String,
                                        visiting : Array(String), recipes : Array(String)) : Nil
-  real = File.real_path(path)
+  real = File.realpath(path)
   if visiting.includes?(real)
     raise ArgumentError.new("Mitamae recipe list cycle: #{(visiting + [real]).join(" -> ")}")
   end
