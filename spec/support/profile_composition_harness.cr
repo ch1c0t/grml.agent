@@ -1,4 +1,5 @@
 require "file_utils"
+require "./profile_composition_interaction"
 
 class ProfileCompositionSpecVM
   getter shared_path : String
@@ -8,7 +9,10 @@ end
 class ProfileCompositionSpecAgent
   include GRML::Agent::ApplyProfile
   getter applied_profiles = [] of String
-  def initialize(shared_path : String); @vm = ProfileCompositionSpecVM.new(shared_path); end
+  def initialize(shared_path : String)
+    @vm = ProfileCompositionSpecVM.new(shared_path)
+    @interaction = ProfileCompositionSpecInteraction.new
+  end
   private def read_profile_packages(name : String, progress : Proc(String, Nil)?) : Array(String); [name]; end
   private def install_profile_packages(name : String, packages : Array(String), progress : Proc(String, Nil)?) : Nil
     @applied_profiles << name

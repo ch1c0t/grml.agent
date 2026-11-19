@@ -1,4 +1,5 @@
 require "json"
+require "random"
 require "set"
 require "qemu"
 require "tmux_repl"
@@ -10,19 +11,77 @@ module GRML
       module Private
         module ApplyProfilePackages
           private def apply_profile_packages(profile_name : String, packages : Array(String),
-                                              verify_cache : Bool, progress : Proc(String, Nil)?) : Nil
+                                              progress : Proc(String, Nil)?) : Nil
             if packages.empty?
-              message = "Profile '#{profile_name}' contains no packages"
-              verify_cache ? report_profile_progress(progress, "#{message}; preparing cache for verification") :
-                report_profile_progress(progress, "#{message}; skipping APT cache preparation")
-              prepare_deb_cache(progress) if verify_cache
+              report_profile_progress(progress, "Profile '#{profile_name}' contains no packages; skipping package installation")
             else
               install_profile_packages(profile_name, packages, progress)
             end
-            if verify_cache
-              report_profile_progress(progress, "Verifying shared Debian package cache after applying profile '#{profile_name}'")
-              verify_deb_cache("hello", progress)
+          end
+        end
+      
+        module ApplyProfileSteps
+          private def apply_profile_steps(name : String, verify : Bool, progress : Proc(String, Nil),
+                                          report : ProfileApplicationReport) : Nil
+            profiles = profile_application_order(name).map do |profile_name|
+              record = report.add_profile(profile_name, [] of String, [] of String, [] of String)
+              packages = read_profile_packages(profile_name, progress)
+              executables = profile_host_executables(profile_name)
+              recipes = profile_mitamae_recipes(profile_name)
+              record.packages, record.host_executables, record.recipes = packages, executables.map(&.[0]), recipes
+              report.persist
+              {profile_name, packages, executables, recipes, record}
             end
+            profiles.each { |profile| apply_profile_steps_for(profile, progress, report) }
+            return unless verify
+            has_packages = profiles.any? { |profile| !profile[1].empty? }
+            report.run_operation(nil, "cache_verification", "hello") do |_operation|
+              verify_profile_cache(name, has_packages, verify, progress)
+            end
+          end
+        end
+      
+        module ApplyProfileStepsFor
+          private def apply_profile_steps_for(profile : Tuple(String, Array(String), Array(Tuple(String, String)), Array(String), ProfileApplicationProfile),
+                                              progress : Proc(String, Nil), report : ProfileApplicationReport) : Nil
+            name, packages, executables, recipes, record = profile
+            begin
+              if packages.empty?
+                report.skip_operation(name, "packages", "packages.txt")
+                apply_profile_packages(name, packages, progress)
+              else
+                report.run_operation(name, "packages", packages.join(" ")) { |_op| apply_profile_packages(name, packages, progress) }
+              end
+              executables.each do |entry|
+                report.run_operation(name, "host_executable", entry[0]) { |_op| install_profile_host_executables([entry], progress) }
+              end
+              recipes.each do |recipe|
+                report.run_operation(name, "mitamae_recipe", recipe) { |op| execute_profile_mitamae_recipes(name, [recipe], progress, op) }
+              end
+              report.finish_profile(record, "success")
+            rescue exception
+              report.finish_profile(record, "failed")
+              raise exception
+            end
+          end
+        end
+      
+        module ApplyProfileWithReport
+          private def apply_profile_with_report(profile_name : String, verify_cache : Bool,
+                                                 progress : Proc(String, Nil)?,
+                                                 report : ProfileApplicationReport) : Nil
+            recorded = ->(chunk : String) { report.append_output(chunk); forward_profile_progress(progress, chunk) }
+            begin
+              apply_profile_steps(profile_name, verify_cache, recorded, report)
+              report.finish("success")
+            rescue exception
+              report.finish("failed", exception.to_s)
+              raise exception
+            end
+          end
+          
+          private def forward_profile_progress(progress : Proc(String, Nil)?, chunk : String) : Nil
+            progress ? progress.call(chunk) : Log.info { chunk }
           end
         end
       
@@ -40,6 +99,41 @@ module GRML
               File.delete(path) if File.exists?(path)
               raise "Could not download host executable '#{name}' from #{url}: #{error.message}"
             end
+          end
+        end
+      
+        module ExecuteProfileMitamaeRecipes
+          private def execute_profile_mitamae_recipes(profile_name : String, recipes : Array(String),
+                                                        progress : Proc(String, Nil)?,
+                                                        operation : ProfileApplicationOperation? = nil) : Nil
+            recipes.each do |relative|
+              recipe = File.join(DEBIAN_PROFILE_DIRECTORY, profile_name, relative)
+              node = File.join(DEBIAN_PROFILE_DIRECTORY, profile_name, "mitamae-node.yml")
+              command = mitamae_recipe_command(recipe, node)
+              report_profile_progress(progress, "Applying Mitamae recipe '#{relative}' from profile '#{profile_name}'")
+              result = @interaction.execute_streaming(command, 30.minutes) do |_stream, chunk|
+                report_profile_output(progress, chunk)
+              end
+              operation.exit_code = result.exit_code if operation
+              unless result.success?
+                raise "Mitamae recipe '#{relative}' in profile '#{profile_name}' failed (exit=#{result.exit_code}, stderr=#{result.stderr.inspect})"
+              end
+            end
+          end
+          
+          private def mitamae_recipe_command(recipe : String, node : String) : String
+            recipe, node = profile_shell_quote(recipe), profile_shell_quote(node)
+            <<-SHELL
+              set -eu
+              command -v mitamae >/dev/null 2>&1 || { echo "mitamae is not installed in the guest" >&2; exit 127; }
+              if [ -f #{node} ]; then
+                mitamae local --node-yaml #{node} #{recipe}
+              elif [ -f /root/.config/recipes/node.yml ]; then
+                mitamae local --node-yaml /root/.config/recipes/node.yml #{recipe}
+              else
+                mitamae local #{recipe}
+              fi
+              SHELL
           end
         end
       
@@ -87,6 +181,50 @@ module GRML
           end
         end
       
+        module ProfileApplicationOrder
+          private def profile_application_order(profile_name : String) : Array(String)
+            ordered = [] of String
+            visit_profile(profile_name, [] of String, [] of String, ordered)
+            ordered
+          end
+          
+          private def visit_profile(name : String, visiting : Array(String),
+                                    visited : Array(String), ordered : Array(String)) : Nil
+            unless name.matches?(DEBIAN_PROFILE_NAME_PATTERN)
+              raise ArgumentError.new("Invalid profile name: #{name.inspect}")
+            end
+            if index = visiting.index(name)
+              cycle = visiting[index..(visiting.size - 1)] + [name]
+              raise ArgumentError.new("Profile dependency cycle: #{cycle.join(" -> ")}")
+            end
+            return if visited.includes?(name)
+            visiting << name
+            profile_dependencies(name).each { |dependency| visit_profile(dependency, visiting, visited, ordered) }
+            visiting.pop
+            visited << name
+            ordered << name
+          end
+        end
+      
+        module ProfileDependencies
+          private def profile_dependencies(profile_name : String) : Array(String)
+            path = File.join(@vm.shared_path, "profiles", profile_name, "profiles.txt")
+            return [] of String unless File.file?(path)
+          
+            dependencies = [] of String
+            File.each_line(path) do |line|
+              name = line.sub(/#.*/, "").strip
+              next if name.empty?
+              unless name.matches?(DEBIAN_PROFILE_NAME_PATTERN)
+                raise ArgumentError.new("Invalid profile dependency in #{path}: #{line.inspect}")
+              end
+              raise ArgumentError.new("Duplicate profile dependency '#{name}' in #{path}") if dependencies.includes?(name)
+              dependencies << name
+            end
+            dependencies
+          end
+        end
+      
         module ProfileHostExecutables
           private def profile_host_executables(profile_name : String) : Array(Tuple(String, String))
             path = File.join(@vm.shared_path, "profiles", profile_name, "host-executables.txt")
@@ -104,6 +242,71 @@ module GRML
               entries << {fields[0], fields[1]}
             end
             entries
+          end
+        end
+      
+        module ProfileMitamaeRecipes
+          private def profile_mitamae_recipes(profile_name : String) : Array(String)
+            root = File.expand_path(File.join(@vm.shared_path, "profiles", profile_name))
+            manifest = File.join(root, "mitamae-recipes.txt")
+            return [] of String unless File.file?(manifest)
+            unless File.realpath(manifest).starts_with?("#{File.realpath(root)}/")
+              raise ArgumentError.new("Mitamae recipe manifest escapes profile: #{manifest}")
+            end
+          
+            recipes = [] of String
+            File.each_line(manifest) do |line|
+              entry = line.sub(/#.*/, "").strip
+              expand_profile_mitamae_recipe(root, entry, [] of String, recipes) unless entry.empty?
+            end
+            recipes
+          end
+        end
+      
+        module ProfileRecipeLists
+          private def expand_profile_recipe_list(root : String, path : String,
+                                                 visiting : Array(String), recipes : Array(String)) : Nil
+            real = File.realpath(path)
+            if visiting.includes?(real)
+              raise ArgumentError.new("Mitamae recipe list cycle: #{(visiting + [real]).join(" -> ")}")
+            end
+            visiting << real
+            File.each_line(path) do |line|
+              entry = line.sub(/#.*/, "").strip
+              expand_profile_mitamae_recipe(root, entry, visiting, recipes) unless entry.empty?
+            end
+            visiting.pop
+          end
+        end
+      
+        module ProfileRecipePaths
+          private def expand_profile_mitamae_recipe(root : String, name : String,
+                                                    visiting : Array(String), recipes : Array(String)) : Nil
+            path = File.expand_path(name, root)
+            unless path.starts_with?("#{root}/")
+              raise ArgumentError.new("Mitamae recipe path must stay inside profile: #{name.inspect}")
+            end
+            path = File.join(path, "default.rb") if Dir.exists?(path)
+            raise ArgumentError.new("Mitamae recipe not found: #{path}") unless File.file?(path)
+            real = File.realpath(path)
+            raise ArgumentError.new("Mitamae recipe escapes profile: #{name.inspect}") unless real.starts_with?("#{File.realpath(root)}/")
+            relative = path.sub("#{root}/", "")
+            expand_profile_recipe_file(root, path, relative, visiting, recipes)
+          end
+          
+          private def expand_profile_recipe_file(root : String, path : String, relative : String,
+                                                 visiting : Array(String), recipes : Array(String)) : Nil
+            case File.extname(path)
+            when ".rb"   then recipes << relative
+            when ".list" then expand_profile_recipe_list(root, path, visiting, recipes)
+            else raise ArgumentError.new("Mitamae recipe must be a .rb file, directory, or .list: #{path}")
+            end
+          end
+        end
+      
+        module ProfileShellQuote
+          private def profile_shell_quote(value : String) : String
+            "'" + value.gsub("'", "'\\''") + "'"
           end
         end
       
@@ -156,14 +359,35 @@ module GRML
           end
         end
       
+        module VerifyProfileCache
+          private def verify_profile_cache(profile_name : String, has_packages : Bool,
+                                           verify_cache : Bool, progress : Proc(String, Nil)?) : Nil
+            return unless verify_cache
+            prepare_deb_cache(progress) unless has_packages
+            report_profile_progress(progress, "Verifying shared Debian package cache after applying profile '#{profile_name}'")
+            verify_deb_cache("hello", progress)
+          end
+        end
+      
         include ApplyProfilePackages
+        include ApplyProfileSteps
+        include ApplyProfileStepsFor
+        include ApplyProfileWithReport
         include DownloadProfileExecutable
+        include ExecuteProfileMitamaeRecipes
         include FindProfileHostExecutable
         include InstallProfileHostExecutables
         include InstallProfilePackages
+        include ProfileApplicationOrder
+        include ProfileDependencies
         include ProfileHostExecutables
+        include ProfileMitamaeRecipes
+        include ProfileRecipeLists
+        include ProfileRecipePaths
+        include ProfileShellQuote
         include ReadProfilePackages
         include ReportProfileProgress
+        include VerifyProfileCache
       end
     
       include Private
@@ -172,14 +396,9 @@ module GRML
       DEBIAN_PROFILE_NAME_PATTERN = /\A[a-zA-Z0-9][a-zA-Z0-9._-]*\z/
       
       def apply_profile(profile_name : String, verify_cache : Bool = false,
-                        progress : Proc(String, Nil)? = nil) : Nil
-        unless profile_name.matches?(DEBIAN_PROFILE_NAME_PATTERN)
-          raise ArgumentError.new("Invalid profile name: #{profile_name.inspect}")
-        end
-        executables = profile_host_executables(profile_name)
-        packages = read_profile_packages(profile_name, progress)
-        apply_profile_packages(profile_name, packages, verify_cache, progress)
-        install_profile_host_executables(executables, progress)
+                        progress : Proc(String, Nil)? = nil, origin : String = "api") : Nil
+        report = ProfileApplicationReport.new(@vm.shared_path, profile_name, origin)
+        apply_profile_with_report(profile_name, verify_cache, progress, report)
       end
     end
   
@@ -202,7 +421,7 @@ module GRML
             STDOUT.print(message)
             STDOUT.flush
           end
-          apply_profile(profile_name, verify_cache, progress)
+          apply_profile(profile_name, verify_cache, progress, "boot")
         end
       end
       
@@ -3157,6 +3376,152 @@ module GRML
       end
   end
 
+  class ProfileApplicationOperation
+    include JSON::Serializable
+    
+    property profile : String?
+    property kind : String
+    property target : String
+    property status : String = "running"
+    property started_at : String
+    property finished_at : String? = nil
+    property exit_code : Int32? = nil
+    property error : String? = nil
+    
+    def initialize(@profile : String?, @kind : String, @target : String)
+      @started_at = Time.utc.to_s("%FT%TZ")
+    end
+    
+    def finish(status : String, error : String? = nil) : Nil
+      @status, @error = status, error
+      @finished_at = Time.utc.to_s("%FT%TZ")
+    end
+  end
+
+  class ProfileApplicationProfile
+    include JSON::Serializable
+    
+    property name : String
+    property status : String = "pending"
+    property packages : Array(String) = [] of String
+    property host_executables : Array(String) = [] of String
+    property recipes : Array(String) = [] of String
+    
+    def initialize(@name : String)
+    end
+  end
+
+  class ProfileApplicationReport
+    module Private
+      module AddProfileAndOutput
+        def add_profile(name : String, packages : Array(String),
+                        executables : Array(String), recipes : Array(String)) : ProfileApplicationProfile
+          profile = ProfileApplicationProfile.new(name)
+          profile.packages = packages
+          profile.host_executables = executables
+          profile.recipes = recipes
+          @profiles << profile
+          persist
+          profile
+        end
+        
+        def append_output(chunk : String) : Nil
+          return if chunk.empty?
+          File.open(@log_path, "a") { |file| file << chunk; file.flush }
+        end
+      end
+    
+      module Finish
+        def finish_profile(profile : ProfileApplicationProfile, status : String) : Nil
+          profile.status = status
+          persist
+        end
+        
+        def finish(status : String, error : String? = nil) : Nil
+          @status, @error = status, error
+          @profiles.each { |p| p.status = "not_started" if p.status == "pending" && status == "failed" }
+          @finished_at = profile_report_timestamp
+          persist
+        end
+      end
+    
+      module PersistAndTimestamp
+        def persist : Nil
+          temporary = "#{@report_path}.tmp"
+          File.write(temporary, to_pretty_json)
+          File.rename(temporary, @report_path)
+        end
+        
+        private def profile_report_timestamp : String
+          Time.utc.to_s("%FT%TZ")
+        end
+      end
+    
+      module RunOperation
+        def run_operation(profile : String?, kind : String, target : String,
+                           &block : ProfileApplicationOperation -> Nil) : Nil
+          operation = ProfileApplicationOperation.new(profile, kind, target)
+          @operations << operation
+          persist
+          begin
+            yield operation
+            operation.finish("success")
+          rescue exception
+            operation.finish("failed", exception.to_s)
+            raise exception
+          ensure
+            persist
+          end
+        end
+        
+        def skip_operation(profile : String?, kind : String, target : String) : Nil
+          operation = ProfileApplicationOperation.new(profile, kind, target)
+          operation.finish("skipped")
+          @operations << operation
+          persist
+        end
+      end
+    
+      include AddProfileAndOutput
+      include Finish
+      include PersistAndTimestamp
+      include RunOperation
+    end
+  
+    include Private
+    include JSON::Serializable
+    
+    property schema_version : Int32 = 1
+    property run_id : String
+    property origin : String
+    property requested_profile : String
+    property status : String = "running"
+    property started_at : String
+    property finished_at : String? = nil
+    property error : String? = nil
+    property output_log : String = "output.log"
+    property profiles = [] of ProfileApplicationProfile
+    property operations = [] of ProfileApplicationOperation
+    
+    @[JSON::Field(ignore: true)]
+    getter report_path : String = ""
+    
+    @[JSON::Field(ignore: true)]
+    getter log_path : String = ""
+    
+    def initialize(shared_path : String, @requested_profile : String, @origin : String)
+      @started_at = profile_report_timestamp
+      stamp = @started_at.gsub(/[-:TZ]/, "")
+      @run_id = "#{stamp}-#{Process.pid}-#{Random.rand(1..1_000_000)}"
+      directory = File.join(shared_path, "profile-applications", @run_id)
+      Dir.mkdir_p(directory)
+      @report_path = File.join(directory, "report.json")
+      @log_path = File.join(directory, output_log)
+      File.write(@log_path, "")
+      persist
+    end
+  end
+
   class REPL
     module ApplyProfile
       def apply_profile(agent : T, arguments : Array(String), progress : Proc(String, Nil)? = nil) : String forall T
@@ -3170,7 +3535,7 @@ module GRML
         end
       
         agent.verify_shared_directory
-        agent.apply_profile(profile_name, false, progress)
+        agent.apply_profile(profile_name, false, progress, "repl")
         "Applied package profile '#{profile_name}'. Package installation is additive; other packages are not removed."
       end
     end

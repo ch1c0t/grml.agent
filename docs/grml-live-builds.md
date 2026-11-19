@@ -11,6 +11,9 @@ QEMU shared directory under `profiles/<name>/`; the guest sees it under
 shared/profiles/rescue/
 ├── profiles.txt                 # optional dependencies for boot/apply_profile
 ├── packages.txt                 # optional packages for the running GRML guest
+├── host-executables.txt         # optional host binaries copied into the guest
+├── mitamae-recipes.txt          # optional Mitamae recipes applied in the guest
+├── mitamae-node.yml             # optional Mitamae node attributes
 ├── builder-packages.txt         # optional extra build-environment packages
 └── grml-live/
     ├── build.yml                # grml-live build settings
@@ -35,6 +38,11 @@ The `profiles.txt` file composes package profiles for `boot PROFILE` and
 change `validate_profile` or `build_iso`. See
 [Boot package profiles](package-profiles.md#boot-with-a-profile) for its
 syntax and application order.
+
+The optional `mitamae-recipes.txt` and `mitamae-node.yml` files are also
+used only when applying a package profile to the running guest; they do not
+affect the resulting ISO. See
+[Apply Mitamae recipes](package-profiles.md#apply-mitamae-recipes).
 
 The `grml-live/config/` directories use the class-based configuration format
 expected by grml-live. For each custom class, add one or more definitions

@@ -94,9 +94,42 @@ apply_profile development
 
 Profile application is additive: it installs or updates the packages listed
 in the selected profile and its dependencies, but does not uninstall packages
-omitted from them.
-Applying a second profile therefore does not undo packages installed by an
-earlier profile.
+omitted from them. Applying a second profile therefore does not undo packages
+installed by an earlier profile.
+
+## Profile application reports
+
+Every profile application creates a unique run directory in the host-side
+shared directory:
+
+```text
+shared/
+└── profile-applications/
+    └── RUN_ID/
+        ├── report.json
+        └── output.log
+```
+
+Both `boot PROFILE` and the REPL command `apply_profile PROFILE` use the
+same report format. The initial JSON report is written with status
+`running` before profile resolution begins and is atomically replaced as
+profiles and operations progress. A normal completion sets the final status
+to `success` or `failed`. If the guest stops abruptly, the last report
+remains `running`, making an interrupted application distinguishable from
+a successful one.
+
+The report contains a schema version, run ID, entry point, requested profile,
+timestamps, resolved dependency order, and per-operation status. Each profile
+entry lists its requested packages, host executables, and expanded recipes.
+Operations identify package installation, each host executable, each Mitamae
+recipe, and optional cache verification. Operation statuses are `running`,
+`success`, `failed`, or `skipped`; failed operations include their error
+message and recipe exit code when available. The adjacent `output.log`
+contains streamed progress and command output. Previous runs are never
+overwritten.
+
+The JSON report is intended as the stable machine-readable interface. Its
+`schema_version` allows consumers to detect future format changes.
 
 The optional ISO path can be combined with a profile:
 
@@ -132,6 +165,33 @@ a Linux release asset for the guest architecture. Blank lines and comments
 are ignored; each entry must contain exactly a command name and an HTTPS
 URL. Duplicate command names are rejected. The file is optional, and profiles
 without it retain their existing behavior.
+
+## Apply Mitamae recipes
+
+A profile can list recipes in `mitamae-recipes.txt`:
+
+```text
+# Paths are relative to this profile directory
+recipes/base.rb
+recipes/network
+recipes/application.list
+```
+
+Entries are applied in order after that profile's packages and host
+executables. A directory selects its `default.rb`; a `.list` file expands
+into more recipe paths, also relative to the profile directory. Nested list
+files are supported, and list cycles or paths escaping the profile directory
+are rejected before profile installation starts. When profiles compose other
+profiles through `profiles.txt`, each dependency's recipes run before the
+selected profile's recipes.
+
+Recipe files are kept in the profile directory and are executed by Mitamae
+inside the GRML guest from the shared mount. Ensure that `mitamae` is
+installed in the guest, for example by adding it to `host-executables.txt`.
+An optional `mitamae-node.yml` in the profile supplies node attributes;
+otherwise the agent uses `/root/.config/recipes/node.yml` when present, and
+runs Mitamae without a node YAML file when neither exists. A failing recipe
+stops profile application.
 
 ## Keep package lists separate
 
