@@ -4,6 +4,9 @@ extend Questions
 extend PrepareAlpineBundle
 extend PrepareDebCache
 extend ApplyProfile
+extend PrepareBuildEnvironment
+extend ValidateProfile
+extend BuildISO
 extend VerifyDebCache
 extend BuildDefinition
 extend Run

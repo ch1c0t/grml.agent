@@ -6,7 +6,7 @@ shards:
 
   amqp-client:
     git: https://github.com/cloudamqp/amqp-client.cr.git
-    version: 1.4.0
+    version: 1.5.0
 
   global-amqp_channel:
     git: https://github.com/ch1c0t/crystal.global-amqp_channel.git
@@ -18,7 +18,7 @@ shards:
 
   qemu:
     git: https://github.com/ch1c0t/crystal.qemu.git
-    version: 0.0.0+git.commit.2f3cda3e60c006c76494dec76c64c75793c95c4a
+    version: 0.0.0+git.commit.d3eb90d0bfb4f09323bdae55cde4cc184e4fbd06
 
   queue:
     git: https://github.com/ch1c0t/crystal.queue.git

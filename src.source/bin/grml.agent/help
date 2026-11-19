@@ -1,4 +1,5 @@
-grml.agent boots GRML and provides an interactive host-side Tmux REPL.
+grml.agent boots GRML, provides an interactive host-side Tmux REPL,
+and can build custom live ISOs using grml-live.
 
 Usage:
   grml.agent boot [PROFILE_NAME] [--verify-deb-cache] [--iso PATH]
@@ -7,50 +8,72 @@ Usage:
   grml.agent --help
   grml.agent --version
 
-A boot profile installs Debian packages from the shared directory before
-starting the host REPL. Store one package name per line in:
+Package profiles:
   shared/profiles/PROFILE_NAME/packages.txt
-Blank lines and lines beginning with # are ignored. For example:
-  shared/profiles/development/packages.txt
+    Optional Debian packages installed into the running GRML guest by boot
+    or apply_profile. One package name per line; blank lines and # comments
+    are ignored. Applying another profile does not uninstall packages.
 
-Booting with a profile prepares the shared apt-cacher-ng cache first, then
-refreshes APT metadata through the proxy and installs the profile packages.
-Use --verify-deb-cache to additionally verify the cache after installation.
-This optional check downloads the default package (hello), disables upstream
-access temporarily, and confirms that the same package archive is served
-from the shared cache.
+grml-live build profiles:
+  shared/profiles/PROFILE_NAME/builder-packages.txt
+    Optional extra Debian packages installed into the guest that runs grml-live.
+  shared/profiles/PROFILE_NAME/grml-live/build.yml
+    YAML manifest containing the suite, classes, system identity, boot options,
+    Secure Boot setting, Debian wayback snapshot date, grml-live git ref, and
+    other build options.
+  shared/profiles/PROFILE_NAME/grml-live/config/
+    Class-based configuration overlays merged over upstream grml-live/config.
+    Use package_config/CLASS for ISO package selection, bootstrap-keyring/CLASS
+    for mmdebstrap signing keys (use the automatically selected
+    DEBIAN_<suite> filename to override the Debian suite keyring), and debconf/,
+    env/, files/, hooks/, scripts/, media-files/, media-scripts/, and tools/
+    for build-time customization.
+    The grml/ directory holds global grml-live settings. Filesystem overlays
+    preserve symbolic links for system configuration.
+  shared/profiles/PROFILE_NAME/grml-live/chroot-install/
+    Optional directory copied under / in the build chroot.
 
-The tmux command starts tmux inside the GRML guest and a separate host-side
-Tmux REPL connected to the same running VM. The host REPL supports:
+Host REPL workflow:
+  prepare_build_environment PROFILE_NAME
+    Install grml-live prerequisites, configure the unprivileged build account
+    and user namespaces, provision or reuse the persistent ext4 build disk,
+    and check out the grml-live revision from build.yml.
+  validate_profile PROFILE_NAME
+    Validate build.yml, builder package names, custom class definitions, and
+    the profile file tree.
+  build_iso PROFILE_NAME
+    Run grml-live image-create and preserve the ISO and logs in
+    /mnt/shared/grml-live/runs/PROFILE_NAME/RUN_ID/output/.
 
+grml-live requires an unprivileged user with working user namespaces and
+subordinate UID/GID ranges. grml.agent creates a dedicated grml-live-builder
+account and provisions a persistent 32 GiB qcow2 disk at ./disks/grml-live-build.qcow2,
+mounted as ext4 at /mnt/grml-live-build in the guest. Build staging, chroot,
+temporary files, and output use that filesystem. The disk is reused across
+build runs and guest restarts; an existing non-ext4 filesystem is never
+reformatted. Output is copied to the shared directory after the build.
+Select only profiles and scripts you trust.
+
+Other host REPL commands:
   ocr
     Recognize text in the latest captured guest display frame.
   guest_exec <shell command>
     Execute a shell command inside the GRML guest through QEMU Guest Agent.
     Output and exit status are returned to the host REPL. Commands run as root.
-  create_disk <name> <size> [qcow2|raw]
-    Create a disk image under ./disks/ and hot-attach it to the running VM.
-    Example: create_disk data 20G
-  attach_disk <path> [qcow2|raw]
-    Hot-attach an existing disk image to the running VM.
-  create_ext4_disk <name> <size> [mountpoint] [qcow2|raw]
-    Create and hot-attach a disk image, create a GPT partition, format it
-    as ext4, and mount it inside the GRML guest. The default mount point is
-    /mnt/<name>. Example: create_ext4_disk data 20G /mnt/data
   apply_profile PROFILE_NAME
-    Apply a shared Debian package profile to the running guest. This installs
-    or updates listed packages and does not uninstall packages from other profiles.
+    Install or update packages from packages.txt into the running guest.
   prepare_alpine_bundle [alpine_branch]
     Prepare and verify an offline Alpine APK repository bundle.
-
-Disk hot-plugging creates a virtio-blk device through QEMU's QMP interface.
-The guest-side setup is executed through QEMU Guest Agent. The new disk is
-identified by its virtio serial, partitioned with sfdisk, formatted with
-mkfs.ext4, and mounted at the requested guest path.
-
-The boot and tmux commands discover a GRML ISO in ./cdrom/ (or QEMU_ISO_DIR)
-unless --iso is supplied. The tmux command keeps the VM and host REPL alive
-until the REPL is stopped or Ctrl-C is pressed.
+  prepare_deb_cache
+    Configure apt-cacher-ng to cache Debian package downloads.
+  verify_deb_cache [package]
+    Verify that a package archive can be fetched while upstream access is disabled.
+  create_disk <name> <size> [qcow2|raw]
+    Create and hot-attach a disk image under ./disks/.
+  attach_disk <path> [qcow2|raw]
+    Hot-attach an existing disk image.
+  create_ext4_disk <name> <size> [mountpoint] [qcow2|raw]
+    Create, partition, format, and mount a new ext4 disk in the guest.
 
 Logging:
   GRML_AGENT_REPL_FOCUS=true|false (default: true)

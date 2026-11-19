@@ -15,5 +15,8 @@ include VerifySharedDirectory
 include PrepareAlpineBundle
 include PrepareDebCache
 include VerifyDebCache
+include ValidateBuildProfile
+include PrepareBuildEnvironment
+include BuildISO
 include Storage
 include Terminate
