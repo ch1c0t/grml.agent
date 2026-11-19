@@ -107,8 +107,8 @@ the QEMU ISO resolver looks for a GRML ISO in:
 
 Set `QEMU_ISO_DIR` to use a different directory. Candidate filenames must
 contain `grml` (case-insensitive) and end in `.iso`. If several candidates
-exist, the first sorted filesystem glob result is selected and the ambiguity
-is logged at DEBUG level. Passing `--iso` bypasses directory discovery.
+exist, the first candidate returned by the directory glob is selected
+and the ambiguity is logged at DEBUG level. Passing `--iso` bypasses directory discovery.
 
 ## Tmux session focus and diagnostics
 
