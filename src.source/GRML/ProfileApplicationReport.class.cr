@@ -14,10 +14,10 @@ property profiles = [] of ProfileApplicationProfile
 property operations = [] of ProfileApplicationOperation
 
 @[JSON::Field(ignore: true)]
-getter report_path : String
+getter report_path : String = ""
 
 @[JSON::Field(ignore: true)]
-getter log_path : String
+getter log_path : String = ""
 
 def initialize(shared_path : String, @requested_profile : String, @origin : String)
   @started_at = profile_report_timestamp
