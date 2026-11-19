@@ -117,6 +117,10 @@ class FakeGRMLAgent
     "fake-device"
   end
 
+  def copy_executable_to_guest(source : String, destination : String) : Nil
+    nil
+  end
+
   def create_ext4_disk(name : String, size : String, mountpoint : String? = nil, format : String = "qcow2") : String
     @ext4_disks << {name, size, mountpoint, format}
     "./disks/#{name}.#{format} (ext4 mounted)"
