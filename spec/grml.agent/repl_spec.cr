@@ -178,6 +178,7 @@ describe GRML::REPL do
       "apply_profile",
       "attach_disk",
       "build_iso",
+      "copy_executable",
       "create_disk",
       "create_ext4_disk",
       "guest_exec",

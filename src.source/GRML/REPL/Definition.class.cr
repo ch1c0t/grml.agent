@@ -2,6 +2,7 @@ def self.build(agent : T) : TmuxREPL::Definition forall T
   TmuxREPL.define("grml") do |repl|
     GRML::REPL::Commands::OCR.register(repl, agent)
     GRML::REPL::Commands::GuestExec.register(repl, agent)
+    GRML::REPL::Commands::CopyExecutable.register(repl, agent)
     GRML::REPL::Commands::PrepareAlpineBundle.register(repl, agent)
     GRML::REPL::Commands::PrepareDebCache.register(repl, agent)
     GRML::REPL::Commands::ApplyProfile.register(repl, agent)
