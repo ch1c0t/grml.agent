@@ -8,5 +8,6 @@ extend PrepareBuildEnvironment
 extend ValidateProfile
 extend BuildISO
 extend VerifyDebCache
+extend CopyExecutable
 extend BuildDefinition
 extend Run
