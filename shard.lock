@@ -18,7 +18,7 @@ shards:
 
   qemu:
     git: https://github.com/ch1c0t/crystal.qemu.git
-    version: 0.0.0+git.commit.893e437b20fcbb579b5cce59a85aed81f26f2641
+    version: 0.0.0+git.commit.f8b716c44547de64eae9779f5aff16fec95c5336
 
   queue:
     git: https://github.com/ch1c0t/crystal.queue.git
