@@ -8,7 +8,7 @@ def run_operation(profile : String?, kind : String, target : String,
     operation.finish("success")
   rescue exception
     operation.finish("failed", exception.to_s)
-    raise
+    raise exception
   ensure
     persist
   end
