@@ -7,96 +7,179 @@ module GRML
 
   class Agent
     module ApplyProfile
+      module Private
+        module ApplyProfilePackages
+          private def apply_profile_packages(profile_name : String, packages : Array(String),
+                                              verify_cache : Bool, progress : Proc(String, Nil)?) : Nil
+            if packages.empty?
+              message = "Profile '#{profile_name}' contains no packages"
+              verify_cache ? report_profile_progress(progress, "#{message}; preparing cache for verification") :
+                report_profile_progress(progress, "#{message}; skipping APT cache preparation")
+              prepare_deb_cache(progress) if verify_cache
+            else
+              install_profile_packages(profile_name, packages, progress)
+            end
+            if verify_cache
+              report_profile_progress(progress, "Verifying shared Debian package cache after applying profile '#{profile_name}'")
+              verify_deb_cache("hello", progress)
+            end
+          end
+        end
+      
+        module DownloadProfileExecutable
+          private def download_profile_executable(name : String, url : String) : String
+            path = File.join(Dir.tempdir, "grml-agent-#{name}-#{Process.pid}-#{Random.rand(1_i64..Int64::MAX)}")
+            begin
+              result = Process.run(["curl", "--fail", "--location", "--show-error", "--output", path, url],
+                output: Process::Redirect::Inherit, error: Process::Redirect::Inherit)
+              unless result.success? && File.file?(path) && File.size(path) > 0
+                raise "curl failed to download '#{name}' (exit=#{result.exit_code})"
+              end
+              path
+            rescue error
+              File.delete(path) if File.exists?(path)
+              raise "Could not download host executable '#{name}' from #{url}: #{error.message}"
+            end
+          end
+        end
+      
+        module FindProfileHostExecutable
+          private def find_profile_host_executable(name : String) : String?
+            Process.find_executable(name)
+          end
+        end
+      
+        module InstallProfileHostExecutables
+          private def install_profile_host_executables(entries : Array(Tuple(String, String)), progress : Proc(String, Nil)?) : Nil
+            entries.each do |entry|
+              name = entry[0]
+              destination = "/usr/local/bin/#{name}"
+              if source = find_profile_host_executable(name)
+                report_profile_progress(progress, "Copying host executable '#{name}' to guest")
+                copy_executable_to_guest(source, destination)
+              else
+                report_profile_progress(progress, "Host executable '#{name}' not found; downloading fallback")
+                source = download_profile_executable(name, entry[1])
+                begin
+                  copy_executable_to_guest(source, destination)
+                ensure
+                  File.delete(source) if File.exists?(source)
+                end
+              end
+            end
+          end
+        end
+      
+        module InstallProfilePackages
+          private def install_profile_packages(profile_name : String, packages : Array(String),
+                                                progress : Proc(String, Nil)?) : Nil
+            report_profile_progress(progress, "Preparing shared Debian package cache for profile '#{profile_name}'")
+            prepare_deb_cache(progress)
+            report_profile_progress(progress, "Installing #{packages.size} package(s) from profile '#{profile_name}'")
+            command = "set -eu; apt-get update; DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends #{packages.join(" ")}"
+            result = @interaction.execute_streaming(command, 30.minutes) do |_stream, chunk|
+              report_profile_output(progress, chunk)
+            end
+            unless result.success?
+              raise "Could not install packages for profile '#{profile_name}' (exit=#{result.exit_code}, stderr=#{result.stderr.inspect})"
+            end
+            report_profile_progress(progress, "Profile '#{profile_name}' packages installed")
+          end
+        end
+      
+        module ProfileHostExecutables
+          private def profile_host_executables(profile_name : String) : Array(Tuple(String, String))
+            path = File.join(@vm.shared_path, "profiles", profile_name, "host-executables.txt")
+            return [] of Tuple(String, String) unless File.file?(path)
+          
+            entries = [] of Tuple(String, String)
+            File.each_line(path) do |line|
+              fields = line.sub(/#.*/, "").strip.split
+              next if fields.empty?
+              unless fields.size == 2 && fields[0].matches?(/\A[a-zA-Z0-9][a-zA-Z0-9._+-]*\z/) &&
+                     fields[1].matches?(/\Ahttps:\/\/[^\s]+\z/)
+                raise ArgumentError.new("Invalid host-executable entry in #{path}: #{line.inspect}")
+              end
+              raise ArgumentError.new("Duplicate host executable: #{fields[0]}") if entries.any? { |entry| entry[0] == fields[0] }
+              entries << {fields[0], fields[1]}
+            end
+            entries
+          end
+        end
+      
+        module ReadProfilePackages
+          private def read_profile_packages(profile_name : String, progress : Proc(String, Nil)?) : Array(String)
+            path = "#{DEBIAN_PROFILE_DIRECTORY}/#{profile_name}/packages.txt"
+            report_profile_progress(progress, "Reading package list for profile '#{profile_name}'")
+            command = <<-SHELL
+              set -eu
+              packages_file='#{path}'
+              if [ ! -f "$packages_file" ]; then
+                echo "Package profile not found: $packages_file" >&2
+                exit 2
+              fi
+              awk '
+                { sub(/#.*/, ""); gsub(/^[[:space:]]+|[[:space:]]+$/, "")
+                  if ($0 == "") next
+                  if ($0 !~ /^[a-z0-9][a-z0-9+.-]*$/) {
+                    printf "Invalid Debian package name on line %d: %s\\n", NR, $0 > "/dev/stderr"
+                    exit 2
+                  }
+                  print
+                }
+              ' "$packages_file"
+              SHELL
+            result = @interaction.execute(command)
+            unless result.success?
+              raise "Could not read package profile '#{profile_name}' (exit=#{result.exit_code}, stderr=#{result.stderr.inspect})"
+            end
+            result.stdout.lines.map(&.strip).reject(&.empty?).uniq
+          end
+        end
+      
+        module ReportProfileProgress
+          private def report_profile_output(progress : Proc(String, Nil)?, chunk : String) : Nil
+            return if chunk.empty?
+            if callback = progress
+              callback.call(chunk)
+            else
+              Log.info { chunk }
+            end
+          end
+          
+          private def report_profile_progress(progress : Proc(String, Nil)?, message : String) : Nil
+            if callback = progress
+              callback.call("#{message}\n")
+            else
+              Log.info { message }
+            end
+          end
+        end
+      
+        include ApplyProfilePackages
+        include DownloadProfileExecutable
+        include FindProfileHostExecutable
+        include InstallProfileHostExecutables
+        include InstallProfilePackages
+        include ProfileHostExecutables
+        include ReadProfilePackages
+        include ReportProfileProgress
+      end
+    
+      include Private
+      
       DEBIAN_PROFILE_DIRECTORY = "/mnt/shared/profiles"
       DEBIAN_PROFILE_NAME_PATTERN = /\A[a-zA-Z0-9][a-zA-Z0-9._-]*\z/
       
-      def apply_profile(
-        profile_name : String,
-        verify_cache : Bool = false,
-        progress : Proc(String, Nil)? = nil
-      ) : Nil
+      def apply_profile(profile_name : String, verify_cache : Bool = false,
+                        progress : Proc(String, Nil)? = nil) : Nil
         unless profile_name.matches?(DEBIAN_PROFILE_NAME_PATTERN)
           raise ArgumentError.new("Invalid profile name: #{profile_name.inspect}")
         end
-      
-        packages_file = "#{DEBIAN_PROFILE_DIRECTORY}/#{profile_name}/packages.txt"
-        report_profile_progress(progress, "Reading package list for profile '#{profile_name}'")
-      
-        command = <<-SHELL
-          set -eu
-          packages_file='#{packages_file}'
-          if [ ! -f "$packages_file" ]; then
-            echo "Package profile not found: $packages_file" >&2
-            exit 2
-          fi
-      
-          awk '
-            {
-              sub(/#.*/, "")
-              gsub(/^[[:space:]]+|[[:space:]]+$/, "")
-              if ($0 == "") next
-              if ($0 !~ /^[a-z0-9][a-z0-9+.-]*$/) {
-                printf "Invalid Debian package name on line %d: %s\\n", NR, $0 > "/dev/stderr"
-                exit 2
-              }
-              print
-            }
-          ' "$packages_file"
-          SHELL
-      
-        profile_result = @interaction.execute(command)
-        unless profile_result.success?
-          raise "Could not read package profile '#{profile_name}' (exit=#{profile_result.exit_code}, stderr=#{profile_result.stderr.inspect})"
-        end
-      
-        packages = profile_result.stdout.lines.map(&.strip).reject(&.empty?).uniq
-        if packages.empty? && !verify_cache
-          report_profile_progress(progress, "Profile '#{profile_name}' contains no packages; skipping APT cache preparation")
-          return
-        end
-      
-        report_profile_progress(progress, "Preparing shared Debian package cache for profile '#{profile_name}'")
-        prepare_deb_cache(progress)
-      
-        unless packages.empty?
-          report_profile_progress(progress, "Installing #{packages.size} package(s) from profile '#{profile_name}'")
-          install_command = <<-SHELL
-            set -eu
-            apt-get update
-            DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends #{packages.join(" ")}
-            SHELL
-      
-          result = @interaction.execute_streaming(install_command, 30.minutes) do |_stream, chunk|
-            report_profile_output(progress, chunk)
-          end
-          unless result.success?
-            raise "Could not install packages for profile '#{profile_name}' (exit=#{result.exit_code}, stderr=#{result.stderr.inspect})"
-          end
-          report_profile_progress(progress, "Profile '#{profile_name}' packages installed")
-        end
-      
-        if verify_cache
-          report_profile_progress(progress, "Verifying shared Debian package cache after applying profile '#{profile_name}'")
-          verify_deb_cache("hello", progress)
-        end
-      end
-      
-      private def report_profile_output(progress : Proc(String, Nil)?, chunk : String) : Nil
-        return if chunk.empty?
-      
-        if callback = progress
-          callback.call(chunk)
-        else
-          Log.info { chunk }
-        end
-      end
-      
-      private def report_profile_progress(progress : Proc(String, Nil)?, message : String) : Nil
-        if callback = progress
-          callback.call("#{message}\n")
-        else
-          Log.info { message }
-        end
+        executables = profile_host_executables(profile_name)
+        packages = read_profile_packages(profile_name, progress)
+        apply_profile_packages(profile_name, packages, verify_cache, progress)
+        install_profile_host_executables(executables, progress)
       end
     end
   
@@ -541,6 +624,33 @@ module GRML
     
       include Public
       include Private
+    end
+  
+    module CopyExecutableToGuest
+      def copy_executable_to_guest(source : String, destination : String) : Nil
+        source_path = File.expand_path(source)
+        raise "Host executable does not exist: #{source_path}" unless File.file?(source_path)
+        unless destination.starts_with?("/") && destination != "/" && !destination.ends_with?("/")
+          raise ArgumentError.new("Guest destination must be an absolute file path: #{destination.inspect}")
+        end
+        verify_shared_directory
+        staged_path = nil.as(String?)
+        begin
+          staged_name = ".grml-agent-upload-#{Process.pid}-#{Random.rand(1_i64..Int64::MAX)}"
+          staged_path = File.join(@vm.shared_path, staged_name)
+          File.copy(source_path, staged_path)
+          guest_path = File.join("/mnt/shared", staged_name)
+          command = "install -D -m 0755 -- #{shell_quote(guest_path)} #{shell_quote(destination)}"
+          result = @interaction.execute(command, 5.minutes)
+          unless result.success?
+            raise "Guest executable installation failed (exit=#{result.exit_code}): #{result.stderr}"
+          end
+        ensure
+          if path = staged_path
+            File.delete(path) if File.exists?(path)
+          end
+        end
+      end
     end
   
     module PrepareAlpineBundle
@@ -2622,6 +2732,7 @@ module GRML
     include PrepareBuildEnvironment
     include BuildISO
     include Storage
+    include CopyExecutableToGuest
     include Terminate
   end
 
@@ -3086,6 +3197,18 @@ module GRML
       end
     end
   
+    module CopyExecutable
+      def copy_executable(agent : T, arguments : Array(String)) : String forall T
+        unless arguments.size == 2
+          raise ArgumentError.new("Usage: copy_executable <host_path> <guest_path>")
+        end
+        source = arguments[0]
+        destination = arguments[1]
+        agent.copy_executable_to_guest(source, destination)
+        "Copied executable #{source} to guest at #{destination} (mode 0755)."
+      end
+    end
+  
     module PrepareAlpineBundle
       DEFAULT_ALPINE_BRANCH = "latest-stable"
       
@@ -3225,6 +3348,7 @@ module GRML
     extend ValidateProfile
     extend BuildISO
     extend VerifyDebCache
+    extend CopyExecutable
     extend BuildDefinition
     extend Run
   
@@ -3266,6 +3390,17 @@ module GRML
           repl.on_command(NAME) do |context, arguments|
             progress = ->(message : String) { context.write(message) }
             GRML::REPL.build_iso(agent, arguments, progress)
+          end
+          nil
+        end
+      end
+    
+      module CopyExecutable
+        NAME = "copy_executable"
+        
+        def self.register(repl : TmuxREPL::Definition, agent : T) : Nil forall T
+          repl.on_command(NAME) do |context, arguments|
+            context.puts(GRML::REPL.copy_executable(agent, arguments))
           end
           nil
         end
@@ -3417,6 +3552,7 @@ module GRML
         TmuxREPL.define("grml") do |repl|
           GRML::REPL::Commands::OCR.register(repl, agent)
           GRML::REPL::Commands::GuestExec.register(repl, agent)
+          GRML::REPL::Commands::CopyExecutable.register(repl, agent)
           GRML::REPL::Commands::PrepareAlpineBundle.register(repl, agent)
           GRML::REPL::Commands::PrepareDebCache.register(repl, agent)
           GRML::REPL::Commands::ApplyProfile.register(repl, agent)
