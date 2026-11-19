@@ -12,12 +12,12 @@ private def prepare_ext4_disk_image(name, size, format, progress) : String
   end
   suffix = name == "grml-live-build" ? "live_build" : name.gsub(/[^A-Za-z0-9_-]/, "_")
   node_name = "grml_disk_#{suffix}"
-  attached = find_named_block_node(node_name)
+  attached = find_attached_disk_info_by_path(path)
   if attached
-    report_storage_progress(progress, "Verifying attached image metadata through QMP")
+    report_storage_progress(progress, "Verifying attached disk image metadata through QMP")
     verify_attached_disk_image(attached, path, format, size)
   else
-    report_storage_progress(progress, "QMP did not report expected block node: #{node_name}")
+    report_storage_progress(progress, "QMP does not report image attached by path")
     report_storage_progress(progress, "Verifying detached disk image size and format")
     verify_detached_disk_image(path, format, size, node_name, progress)
   end

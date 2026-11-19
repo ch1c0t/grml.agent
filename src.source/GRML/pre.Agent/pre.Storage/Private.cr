@@ -5,9 +5,8 @@ include EnsureExt4ProvisioningCommand
 include ExecuteQMPChecked
 include Ext4ProvisioningCommand
 include FindAttachedDiskInfo
+include FindAttachedDiskInfoByPath
 include FindAttachedDiskPath
-include FindNamedBlockNode
-include FindNamedBlockNodePath
 include ShellQuote
 include ValidateDiskFormat
 include ValidateDiskName
