@@ -12,7 +12,7 @@ private def report_missing_ext4_disk : String
       echo "Virtio by-id links:"
       for link in /dev/disk/by-id/virtio-*; do
         [ -e "$link" ] || continue
-        printf '%s -> %s\\n' "$link" "$(readlink "$link")"
+        printf '%s -> %s\n' "$link" "$(readlink "$link")"
       done
       echo "Recent kernel messages:"
       dmesg | tail -n 60 || true
