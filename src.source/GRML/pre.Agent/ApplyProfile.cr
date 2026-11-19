@@ -1,3 +1,5 @@
+include Private
+
 DEBIAN_PROFILE_DIRECTORY = "/mnt/shared/profiles"
 DEBIAN_PROFILE_NAME_PATTERN = /\A[a-zA-Z0-9][a-zA-Z0-9._-]*\z/
 
