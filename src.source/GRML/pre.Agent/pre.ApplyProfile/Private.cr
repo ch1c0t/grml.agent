@@ -1,11 +1,16 @@
 include ApplyProfilePackages
 include DownloadProfileExecutable
+include ExecuteProfileMitamaeRecipes
 include FindProfileHostExecutable
 include InstallProfileHostExecutables
 include InstallProfilePackages
 include ProfileApplicationOrder
 include ProfileDependencies
 include ProfileHostExecutables
+include ProfileMitamaeRecipes
+include ProfileRecipeLists
+include ProfileRecipePaths
+include ProfileShellQuote
 include ReadProfilePackages
 include ReportProfileProgress
 include VerifyProfileCache

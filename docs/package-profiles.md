@@ -133,6 +133,33 @@ are ignored; each entry must contain exactly a command name and an HTTPS
 URL. Duplicate command names are rejected. The file is optional, and profiles
 without it retain their existing behavior.
 
+## Apply Mitamae recipes
+
+A profile can list recipes in `mitamae-recipes.txt`:
+
+```text
+# Paths are relative to this profile directory
+recipes/base.rb
+recipes/network
+recipes/application.list
+```
+
+Entries are applied in order after that profile's packages and host
+executables. A directory selects its `default.rb`; a `.list` file expands
+into more recipe paths, also relative to the profile directory. Nested list
+files are supported, and list cycles or paths escaping the profile directory
+are rejected before profile installation starts. When profiles compose other
+profiles through `profiles.txt`, each dependency's recipes run before the
+selected profile's recipes.
+
+Recipe files are kept in the profile directory and are executed by Mitamae
+inside the GRML guest from the shared mount. Ensure that `mitamae` is
+installed in the guest, for example by adding it to `host-executables.txt`.
+An optional `mitamae-node.yml` in the profile supplies node attributes;
+otherwise the agent uses `/root/.config/recipes/node.yml` when present, and
+runs Mitamae without a node YAML file when neither exists. A failing recipe
+stops profile application.
+
 ## Keep package lists separate
 
 A profile used for a custom ISO build may contain more than `packages.txt`.
