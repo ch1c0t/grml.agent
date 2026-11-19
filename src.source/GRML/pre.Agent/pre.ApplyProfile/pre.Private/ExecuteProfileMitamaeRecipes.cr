@@ -1,5 +1,6 @@
 private def execute_profile_mitamae_recipes(profile_name : String, recipes : Array(String),
-                                              progress : Proc(String, Nil)?) : Nil
+                                              progress : Proc(String, Nil)?,
+                                              operation : ProfileApplicationOperation? = nil) : Nil
   recipes.each do |relative|
     recipe = File.join(DEBIAN_PROFILE_DIRECTORY, profile_name, relative)
     node = File.join(DEBIAN_PROFILE_DIRECTORY, profile_name, "mitamae-node.yml")
@@ -8,6 +9,7 @@ private def execute_profile_mitamae_recipes(profile_name : String, recipes : Arr
     result = @interaction.execute_streaming(command, 30.minutes) do |_stream, chunk|
       report_profile_output(progress, chunk)
     end
+    operation.exit_code = result.exit_code if operation
     unless result.success?
       raise "Mitamae recipe '#{relative}' in profile '#{profile_name}' failed (exit=#{result.exit_code}, stderr=#{result.stderr.inspect})"
     end
@@ -15,8 +17,7 @@ private def execute_profile_mitamae_recipes(profile_name : String, recipes : Arr
 end
 
 private def mitamae_recipe_command(recipe : String, node : String) : String
-  recipe = profile_shell_quote(recipe)
-  node = profile_shell_quote(node)
+  recipe, node = profile_shell_quote(recipe), profile_shell_quote(node)
   <<-SHELL
     set -eu
     command -v mitamae >/dev/null 2>&1 || { echo "mitamae is not installed in the guest" >&2; exit 127; }

@@ -94,9 +94,42 @@ apply_profile development
 
 Profile application is additive: it installs or updates the packages listed
 in the selected profile and its dependencies, but does not uninstall packages
-omitted from them.
-Applying a second profile therefore does not undo packages installed by an
-earlier profile.
+omitted from them. Applying a second profile therefore does not undo packages
+installed by an earlier profile.
+
+## Profile application reports
+
+Every profile application creates a unique run directory in the host-side
+shared directory:
+
+```text
+shared/
+└── profile-applications/
+    └── RUN_ID/
+        ├── report.json
+        └── output.log
+```
+
+Both `boot PROFILE` and the REPL command `apply_profile PROFILE` use the
+same report format. The initial JSON report is written with status
+`running` before profile resolution begins and is atomically replaced as
+profiles and operations progress. A normal completion sets the final status
+to `success` or `failed`. If the guest stops abruptly, the last report
+remains `running`, making an interrupted application distinguishable from
+a successful one.
+
+The report contains a schema version, run ID, entry point, requested profile,
+timestamps, resolved dependency order, and per-operation status. Each profile
+entry lists its requested packages, host executables, and expanded recipes.
+Operations identify package installation, each host executable, each Mitamae
+recipe, and optional cache verification. Operation statuses are `running`,
+`success`, `failed`, or `skipped`; failed operations include their error
+message and recipe exit code when available. The adjacent `output.log`
+contains streamed progress and command output. Previous runs are never
+overwritten.
+
+The JSON report is intended as the stable machine-readable interface. Its
+`schema_version` allows consumers to detect future format changes.
 
 The optional ISO path can be combined with a profile:
 

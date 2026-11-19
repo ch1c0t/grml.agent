@@ -1,4 +1,7 @@
 include ApplyProfilePackages
+include ApplyProfileSteps
+include ApplyProfileStepsFor
+include ApplyProfileWithReport
 include DownloadProfileExecutable
 include ExecuteProfileMitamaeRecipes
 include FindProfileHostExecutable

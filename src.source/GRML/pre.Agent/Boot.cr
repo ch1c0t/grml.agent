@@ -16,7 +16,7 @@ def boot(profile_name : String? = nil, verify_cache : Bool = false) : Nil
       STDOUT.print(message)
       STDOUT.flush
     end
-    apply_profile(profile_name, verify_cache, progress)
+    apply_profile(profile_name, verify_cache, progress, "boot")
   end
 end
 

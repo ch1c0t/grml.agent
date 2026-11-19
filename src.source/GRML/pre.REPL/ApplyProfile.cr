@@ -9,6 +9,6 @@ def apply_profile(agent : T, arguments : Array(String), progress : Proc(String, 
   end
 
   agent.verify_shared_directory
-  agent.apply_profile(profile_name, false, progress)
+  agent.apply_profile(profile_name, false, progress, "repl")
   "Applied package profile '#{profile_name}'. Package installation is additive; other packages are not removed."
 end
