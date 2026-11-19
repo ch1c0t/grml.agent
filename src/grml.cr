@@ -1530,8 +1530,9 @@ module GRML
           private def ensure_ext4_provisioning_command(serial : String, mountpoint : String) : String
             [
               "set -eu",
+              "serial=#{shell_quote(serial)}",
               "disk=#{shell_quote("/dev/disk/by-id/virtio-#{serial}")}",
-              "partition=\"$disk-part1\"",
+              "partition=\"\"",
               "mountpoint=#{shell_quote(mountpoint)}",
               wait_for_ext4_disk,
               verify_ext4_mount,
@@ -1726,6 +1727,28 @@ module GRML
           end
         end
       
+        module ReportMissingExt4Disk
+          private def report_missing_ext4_disk : String
+            <<-SCRIPT
+              echo "Guest block devices:"
+              lsblk -o NAME,PATH,TYPE,SIZE,SERIAL,FSTYPE,LABEL,MOUNTPOINTS || true
+              echo "Virtio block-device serials:"
+              for block in /sys/block/vd*; do
+                [ -d "$block" ] || continue
+                printf '%s serial=' "$block"
+                cat "$block/serial" 2>/dev/null || echo "<unavailable>"
+              done
+              echo "Virtio by-id links:"
+              for link in /dev/disk/by-id/virtio-*; do
+                [ -e "$link" ] || continue
+                printf '%s -> %s\n' "$link" "$(readlink "$link")"
+              done
+              echo "Recent kernel messages:"
+              dmesg | tail -n 60 || true
+            SCRIPT
+          end
+        end
+      
         module ReportStorageOutput
           private def report_storage_output(progress : Proc(String, Nil)?, chunk : String) : Nil
             return if chunk.empty?
@@ -1882,15 +1905,33 @@ module GRML
         module WaitForExt4Disk
           private def wait_for_ext4_disk : String
             <<-SCRIPT
-              echo "Waiting for guest disk device: $disk"
+              echo "Waiting for guest disk with serial: $serial"
               for attempt in $(seq 1 50); do
+                if [ ! -b "$disk" ]; then
+                  for serial_file in /sys/block/vd*/serial; do
+                    [ -r "$serial_file" ] || continue
+                    actual_serial=$(cat "$serial_file")
+                    if [ "$actual_serial" = "$serial" ]; then
+                      device="${serial_file#/sys/block/}"
+                      disk="/dev/${device%%/*}"
+                      echo "Found virtio disk by sysfs serial: $disk"
+                      break
+                    fi
+                  done
+                fi
                 [ -b "$disk" ] && break
                 sleep 0.1
               done
               if [ ! -b "$disk" ]; then
-                echo "Guest block device did not appear: $disk" >&2
+                echo "Guest block device did not appear for serial: $serial" >&2
+                report_missing_ext4_disk >&2
                 exit 1
               fi
+              case "$disk" in
+                /dev/disk/by-id/*) partition="$disk-part1" ;;
+                *) partition="${disk}1" ;;
+              esac
+              echo "Using guest disk: $disk; partition: $partition"
             SCRIPT
           end
         end
@@ -1943,6 +1984,7 @@ module GRML
         include StorageDiagnosticsPayload
         include WriteStorageDiagnostics
         include VerifyDetachedDiskImage
+        include ReportMissingExt4Disk
       end
     
       module Public
