@@ -14,9 +14,11 @@ describe "GRML guest disk lookup" do
     command = GRMLGuestDiskLookupHarness.new.command
     command.should contain("/sys/block/vd*/serial")
     command.should contain("actual_serial")
-    command.should contain("report_missing_ext4_disk")
+    command.should contain("report_missing_ext4_disk() {")
+    command.should contain("report_missing_ext4_disk >&2")
     command.should contain("partition=\"$disk-part1\"")
     command.should contain("partition=\"${disk}1\"")
     command.should contain("NAME,PATH,TYPE,SIZE,SERIAL,FSTYPE,LABEL,MOUNTPOINTS")
+    command.index("report_missing_ext4_disk() {").not_nil!.should be < command.index("report_missing_ext4_disk >&2").not_nil!
   end
 end
