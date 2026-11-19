@@ -80,7 +80,7 @@ class FakeGRMLAgent
     @shared_directory_verifications += 1
   end
 
-  def apply_profile(profile_name : String, verify_cache : Bool = false, progress : Proc(String, Nil)? = nil) : Nil
+  def apply_profile(profile_name : String, verify_cache : Bool = false, progress : Proc(String, Nil)? = nil, origin : String = "repl") : Nil
     @applied_profiles << profile_name
     progress.try &.call("fake profile application progress")
   end
