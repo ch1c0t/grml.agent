@@ -28,3 +28,10 @@ include MountExt4Partition
 include DiskSizeMultiplier
 include ExpectedDiskImageSize
 include DiskImageVirtualSize
+include CaptureStorageCommand
+include CaptureStorageQMP
+include StorageQMPDiagnostics
+include StorageHostDiagnostics
+include StorageDiagnosticsPayload
+include WriteStorageDiagnostics
+include VerifyDetachedDiskImage
