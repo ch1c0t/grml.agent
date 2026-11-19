@@ -1,15 +1,9 @@
 require "file_utils"
+require "./profile_composition_interaction"
 
 class ProfileCompositionSpecVM
   getter shared_path : String
   def initialize(@shared_path : String); end
-end
-
-class ProfileCompositionSpecInteraction
-  def execute_streaming(command : String, timeout : Time::Span = 30.seconds,
-                        &block : Symbol, String ->) : QEMU::CommandResult
-    QEMU::CommandResult.new(0, "", "")
-  end
 end
 
 class ProfileCompositionSpecAgent
