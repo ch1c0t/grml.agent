@@ -4,6 +4,8 @@ require "../../src/logger"
 require "../../src/grml"
 class GRMLAttachedDiskFakeVM
   getter commands = [] of String
+  getter display : String? = ":88"; getter monitor_path = "/tmp/grml-attached-disk.sock"; getter iso_path : String? = nil
+  def running? : Bool; true; end
   def initialize(@path : String); end
   def execute_qmp(command : String, arguments : Hash(String, JSON::Any)? = nil) : JSON::Any
     @commands << command
