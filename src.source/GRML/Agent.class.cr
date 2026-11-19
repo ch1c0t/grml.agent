@@ -19,4 +19,5 @@ include ValidateBuildProfile
 include PrepareBuildEnvironment
 include BuildISO
 include Storage
+include CopyExecutableToGuest
 include Terminate
