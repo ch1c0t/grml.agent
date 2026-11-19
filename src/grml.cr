@@ -1403,6 +1403,24 @@ module GRML
           end
         end
       
+        module CaptureStorageCommand
+          private def capture_storage_command(command : String, arguments : Array(String)) : JSON::Any
+            output, error = IO::Memory.new, IO::Memory.new
+            result = Process.run(command, arguments, output: output, error: error)
+            JSON.parse({"argv" => [command] + arguments, "exit_code" => result.exit_code, "stdout" => output.to_s, "stderr" => error.to_s}.to_json)
+          rescue ex
+            JSON.parse({"argv" => [command] + arguments, "error" => ex.message}.to_json)
+          end
+        end
+      
+        module CaptureStorageQMP
+          private def capture_storage_qmp(command : String) : JSON::Any
+            @vm.execute_qmp(command)
+          rescue ex
+            JSON.parse({"error" => ex.message}.to_json)
+          end
+        end
+      
         module CreateDiskImage
           private def create_disk_image(name : String, size : String, format : String) : String
             validate_disk_name(name)
@@ -1499,12 +1517,8 @@ module GRML
           private def ensure_ext4_disk_attachment(path, name, format, progress) : Nil
             suffix = name == "grml-live-build" ? "live_build" : name.gsub(/[^A-Za-z0-9_-]/, "_")
             device_id = "grml_virtio_disk_#{suffix}"
-            attached_path = find_named_block_node_path("grml_disk_#{suffix}")
-            if attached_path
-              unless File.expand_path(attached_path) == path
-                raise "QEMU device #{device_id} is attached to another image: #{attached_path}"
-              end
-              report_storage_progress(progress, "Reusing QEMU disk attachment: #{device_id}")
+            if find_attached_disk_info_by_path(path)
+              report_storage_progress(progress, "Reusing QEMU disk attachment for image: #{path}")
             else
               report_storage_progress(progress, "Attaching disk to QEMU: #{device_id}")
               attach_disk_with_serial(path, format, suffix, name)
@@ -1609,31 +1623,27 @@ module GRML
           end
         end
       
+        module FindAttachedDiskInfoByPath
+          private def find_attached_disk_info_by_path(path : String) : JSON::Any?
+            response = execute_qmp_checked("query-block", Hash(String, JSON::Any).new)
+            records = response.as_h["return"]?.try(&.as_a)
+            raise "QMP query-block returned no block-device list" unless records
+            matches = records.compact_map do |item|
+              inserted = item.as_h["inserted"]?
+              attached_path = inserted.try { |block| block.as_h["file"]?.try(&.as_s) }
+              inserted if attached_path && File.expand_path(attached_path) == File.expand_path(path)
+            end
+            raise "QEMU reports multiple devices for image: #{path}" if matches.size > 1
+            matches.first?
+          end
+        end
+      
         module FindAttachedDiskPath
           private def find_attached_disk_path(device_id : String) : String?
             inserted = find_attached_disk_info(device_id)
             return unless inserted
             path = inserted.as_h["file"]?.try(&.as_s)
             raise "QMP reports #{device_id} attached without a backing-file path" unless path
-            path
-          end
-        end
-      
-        module FindNamedBlockNode
-          private def find_named_block_node(node_name : String) : JSON::Any?
-            response = execute_qmp_checked("query-named-block-nodes", Hash(String, JSON::Any).new)
-            records = response.as_h["return"]?.try(&.as_a)
-            raise "QMP query-named-block-nodes returned no node list" unless records
-            records.find { |item| item.as_h["node-name"]?.try(&.as_s) == node_name }
-          end
-        end
-      
-        module FindNamedBlockNodePath
-          private def find_named_block_node_path(node_name : String) : String?
-            node = find_named_block_node(node_name)
-            return unless node
-            path = node.as_h["file"]?.try(&.as_s)
-            raise "QMP reports #{node_name} without a backing-file path" unless path
             path
           end
         end
@@ -1682,13 +1692,15 @@ module GRML
               path = create_disk_image(name, size, format)
             end
             suffix = name == "grml-live-build" ? "live_build" : name.gsub(/[^A-Za-z0-9_-]/, "_")
-            attached = find_named_block_node("grml_disk_#{suffix}")
+            node_name = "grml_disk_#{suffix}"
+            attached = find_attached_disk_info_by_path(path)
             if attached
-              report_storage_progress(progress, "Verifying attached image metadata through QMP")
+              report_storage_progress(progress, "Verifying attached disk image metadata through QMP")
               verify_attached_disk_image(attached, path, format, size)
             else
+              report_storage_progress(progress, "QMP does not report image attached by path")
               report_storage_progress(progress, "Verifying detached disk image size and format")
-              verify_disk_image_size(path, format, size)
+              verify_detached_disk_image(path, format, size, node_name, progress)
             end
             path
           end
@@ -1741,6 +1753,45 @@ module GRML
           end
         end
       
+        module StorageDiagnosticsPayload
+          private def storage_diagnostics_payload(path : String, node_name : String) : String
+            JSON.parse({
+              "timestamp_utc" => Time.utc.to_s, "image_path" => path,
+              "expected_node_name" => node_name,
+              "vm" => {"running" => @vm.running?, "display" => @vm.display,
+                "iso_path" => @vm.iso_path, "monitor_path" => @vm.monitor_path,
+                "monitor_socket_exists" => File.exists?(@vm.monitor_path)},
+              "qmp" => storage_qmp_diagnostics,
+              "host" => storage_host_diagnostics(path)
+            }.to_json).to_json
+          end
+        end
+      
+        module StorageHostDiagnostics
+          private def storage_host_diagnostics(path : String) : JSON::Any
+            owners = capture_storage_command("fuser", [path])
+            pids = owners.as_h["stdout"]?.try(&.as_s).to_s.split.compact_map(&.to_i?).uniq
+            processes = pids.map { |pid| capture_storage_command("ps", ["-ww", "-p", pid.to_s, "-o", "pid=,ppid=,user=,args="]) }
+            JSON.parse({
+              "fuser_verbose" => capture_storage_command("fuser", ["-v", path]),
+              "fuser_pids" => owners, "owner_processes" => processes,
+              "lslocks" => capture_storage_command("lslocks", ["--notruncate", "--output", "PID,COMMAND,TYPE,MODE,PATH"]),
+              "qemu_processes" => capture_storage_command("pgrep", ["-af", "qemu-system-x86_64"])
+            }.to_json)
+          end
+        end
+      
+        module StorageQMPDiagnostics
+          private def storage_qmp_diagnostics : JSON::Any
+            JSON.parse({
+              "query-named-block-nodes" => capture_storage_qmp("query-named-block-nodes"),
+              "query-block" => capture_storage_qmp("query-block"),
+              "query-status" => capture_storage_qmp("query-status"),
+              "query-version" => capture_storage_qmp("query-version")
+            }.to_json)
+          end
+        end
+      
         module ValidateDiskFormat
           private def validate_disk_format(format : String) : Nil
             unless DISK_FORMATS.includes?(format)
@@ -1779,6 +1830,20 @@ module GRML
             actual_bytes = disk_image_virtual_size(image.to_json)
             expected_bytes = expected_disk_image_size(size)
             raise "Attached disk is too small: #{actual_bytes} bytes, #{expected_bytes} required" if actual_bytes < expected_bytes
+          end
+        end
+      
+        module VerifyDetachedDiskImage
+          private def verify_detached_disk_image(path, format, size, node_name, progress) : Nil
+            verify_disk_image_size(path, format, size)
+          rescue ex
+            begin
+              report = write_storage_diagnostics(path, node_name)
+              report_storage_progress(progress, "Storage diagnostics written: #{report}")
+            rescue diagnostic_error
+              raise "#{ex.message}\nCould not write storage diagnostics: #{diagnostic_error.message}"
+            end
+            raise "#{ex.message}\nStorage diagnostics: #{report}"
           end
         end
       
@@ -1830,6 +1895,18 @@ module GRML
           end
         end
       
+        module WriteStorageDiagnostics
+          private def write_storage_diagnostics(path : String, node_name : String) : String
+            state = ENV["XDG_STATE_HOME"]? || File.join(ENV["HOME"]? || "/tmp", ".local", "state")
+            directory = File.join(state, "grml-agent", "storage")
+            Dir.mkdir_p(directory)
+            name = "build-workspace-#{Time.utc.to_s("%Y%m%dT%H%M%S")}-#{Process.pid}.json"
+            report = File.join(directory, name)
+            File.write(report, storage_diagnostics_payload(path, node_name))
+            report
+          end
+        end
+      
         include AttachDiskWithSerial
         include CreateDiskImage
         include EnsureExt4Disk
@@ -1837,9 +1914,8 @@ module GRML
         include ExecuteQMPChecked
         include Ext4ProvisioningCommand
         include FindAttachedDiskInfo
+        include FindAttachedDiskInfoByPath
         include FindAttachedDiskPath
-        include FindNamedBlockNode
-        include FindNamedBlockNodePath
         include ShellQuote
         include ValidateDiskFormat
         include ValidateDiskName
@@ -1860,6 +1936,13 @@ module GRML
         include DiskSizeMultiplier
         include ExpectedDiskImageSize
         include DiskImageVirtualSize
+        include CaptureStorageCommand
+        include CaptureStorageQMP
+        include StorageQMPDiagnostics
+        include StorageHostDiagnostics
+        include StorageDiagnosticsPayload
+        include WriteStorageDiagnostics
+        include VerifyDetachedDiskImage
       end
     
       module Public
