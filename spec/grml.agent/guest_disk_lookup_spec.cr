@@ -17,6 +17,6 @@ describe "GRML guest disk lookup" do
     command.should contain("report_missing_ext4_disk")
     command.should contain("partition=\"$disk-part1\"")
     command.should contain("partition=\"${disk}1\"")
-    command.should contain("lsblk -o NAME,PATH,TYPE,SIZE,SERIAL")
+    command.should contain("NAME,PATH,TYPE,SIZE,SERIAL,FSTYPE,LABEL,MOUNTPOINTS")
   end
 end
