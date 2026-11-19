@@ -40,6 +40,21 @@ heredoc terminators becoming file contents when commands are embedded in
 Crystal's own heredocs. The cache remains in the shared directory when the
 GRML VM is shut down.
 
+## Package profiles
+
+Applying a non-empty guest package profile with `boot PROFILE` or
+`apply_profile PROFILE` automatically calls `prepare_deb_cache` before
+running `apt-get update` and installing the profile's packages.
+An empty `packages.txt` skips cache preparation unless
+`boot PROFILE --verify-deb-cache` was requested. See
+[Boot package profiles](package-profiles.md) for the package-list format and
+command behavior.
+
+The build-environment preparation workflow also prepares this shared cache
+before installing grml-live builder dependencies. The grml-live command is
+launched with `APT_PROXY=http://127.0.0.1:3142` so mmdebstrap and subsequent
+APT operations can use the proxy.
+
 ## Package version behavior
 
 APT refreshes repository metadata to discover the current candidate version.
@@ -85,26 +100,29 @@ ordinary APT commands to use the proxy automatically.
 
 ## Verify actual package reuse
 
-prepare_deb_cache verifies the mount, daemon configuration, service-user write
-access, and proxy readiness. It does not download a package, so its success
-message must not be interpreted as proof that an archive has been cached.
+`prepare_deb_cache` verifies the mount, daemon configuration, service-user
+write access, and proxy readiness. It does not download a package, so its
+success message must not be interpreted as proof that an archive has been
+cached.
 
 Run:
 
-    verify_deb_cache
+```text
+verify_deb_cache
+```
 
-The command uses the Debian package hello by default. You can select another
-package with verify_deb_cache bash. The package name must be a simple Debian
-binary package name.
+The command uses the Debian package `hello` by default. You can select
+another package with `verify_deb_cache bash`. The package name must be a
+simple Debian binary package name.
 
 The verification performs an integration test through APT:
 
 1. Refresh package indexes and resolve the current candidate version.
-2. Download that exact .deb through the configured APT HTTP proxy into a
+2. Download that exact `.deb` through the configured APT HTTP proxy into a
    fresh temporary directory and record its SHA-256 checksum.
-3. Temporarily configure apt-cacher-ng with Offlinemode: 1. In this mode the
-   proxy refuses upstream downloads and can only serve content already in
-   its cache.
+3. Temporarily configure apt-cacher-ng with `Offlinemode: 1`. In this mode
+   the proxy refuses upstream downloads and can only serve content already
+   in its cache.
 4. Download the same package version again into a different temporary
    directory. The command compares its SHA-256 checksum with the first
    download.
@@ -112,8 +130,8 @@ The verification performs an integration test through APT:
    in normal online mode, including when a verification stage fails.
 
 A successful result therefore demonstrates that the same package archive was
-served while upstream access was disabled. The first download requires network
-access unless the archive is already cached. The selected package must come
-from an HTTP repository; this proxy does not cache HTTPS package payloads.
-Temporary download files are removed after the test. The first successful
-download remains in the persistent shared cache.
+served while upstream access was disabled. The first download requires
+network access unless the archive is already cached. The selected package
+must come from an HTTP repository; this proxy does not cache HTTPS package
+payloads. Temporary download files are removed after the test. The first
+successful download remains in the persistent shared cache.
