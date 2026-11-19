@@ -15,8 +15,8 @@ private def apply_profile_steps_for(profile : Tuple(String, Array(String), Array
       report.run_operation(name, "mitamae_recipe", recipe) { |op| execute_profile_mitamae_recipes(name, [recipe], progress, op) }
     end
     report.finish_profile(record, "success")
-  rescue
+  rescue exception
     report.finish_profile(record, "failed")
-    raise
+    raise exception
   end
 end

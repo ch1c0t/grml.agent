@@ -7,7 +7,7 @@ private def apply_profile_with_report(profile_name : String, verify_cache : Bool
     report.finish("success")
   rescue exception
     report.finish("failed", exception.to_s)
-    raise
+    raise exception
   end
 end
 
