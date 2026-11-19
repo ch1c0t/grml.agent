@@ -34,3 +34,4 @@ include StorageHostDiagnostics
 include StorageDiagnosticsPayload
 include WriteStorageDiagnostics
 include VerifyDetachedDiskImage
+include ReportMissingExt4Disk
