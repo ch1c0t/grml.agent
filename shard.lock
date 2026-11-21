@@ -18,7 +18,7 @@ shards:
 
   qemu:
     git: https://github.com/ch1c0t/crystal.qemu.git
-    version: 0.0.0+git.commit.d3eb90d0bfb4f09323bdae55cde4cc184e4fbd06
+    version: 0.0.0+git.commit.6655582ba48ecce967dae45535bbc15521f14440
 
   queue:
     git: https://github.com/ch1c0t/crystal.queue.git
@@ -42,7 +42,7 @@ shards:
 
   tmux_repl:
     git: https://github.com/ch1c0t/tmux-repl.git
-    version: 0.1.0+git.commit.77da7a5a45147caa8d37892409b49d2715b65089
+    version: 0.1.0+git.commit.b2ef3ce2de5d70d517ae39b766c5cf303fc7d81c
 
   xephyr_context:
     git: https://github.com/ch1c0t/xephyr.context.git
